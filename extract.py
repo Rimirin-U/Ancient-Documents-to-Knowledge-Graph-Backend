@@ -136,17 +136,28 @@ def read_contract_text(file_path: str) -> str:
     raise ValueError(f"无法以常见编码读取文件: {file_path}")
 
 
-# === 主程序：从指定路径加载文本并提取信息 ===
-if __name__ == "__main__":
-    file_path = r"E:\STUDY\appcontest\data\5.txt"
-
+def process_contract_by_id(id: str, model="qwen-turbo") -> bool:
+    """
+    输入 id
+    读取 ./output/text/{id}.txt
+    输出 ./output/extract/{id}.txt
+    成功返回 True，失败返回 False
+    """
     try:
-        contract_text = read_contract_text(file_path)
-        result = extract_entities_relations_with_qwen(contract_text, model="qwen-turbo")
+        input_path = f"./output/text/{id}.txt"
+        output_dir = "./output/extract"
+        output_path = f"{output_dir}/{id}.txt"
 
-        # 打印完整结果（格式化）
-        print("结果输出:")
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        os.makedirs(output_dir, exist_ok=True)
+
+        contract_text = read_contract_text(input_path)
+        result = extract_entities_relations_with_qwen(contract_text, model=model)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+        return True
 
     except Exception as e:
-        print(f"[文件读取错误] {e}")
+        print(f"[处理失败][ID={id}] {e}")
+        return False
