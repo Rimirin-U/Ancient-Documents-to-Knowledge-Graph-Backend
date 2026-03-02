@@ -1,0 +1,10 @@
+jinja2
+openai
+pydantic
+sqlalchemy
+networkx
+fastapi
+uvicorn
+python-dotenv
+dashscope       # 旧提取
+paddleocr
