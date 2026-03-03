@@ -7,12 +7,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from database import init_db, get_db, Image, ImageStatus, User
+from database import init_db, get_db, Image, User, OcrResult
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
+
+from ocr import ocr_image_by_id
 
 # JWT 配置
 SECRET_KEY = "temp"
@@ -239,8 +241,7 @@ async def upload_image(
             user_id=user_id,
             filename=unique_filename,
             path=file_path,
-            upload_time=datetime.now(timezone.utc),
-            status=ImageStatus.PENDING
+            upload_time=datetime.now(timezone.utc)
         )
         db.add(db_image)
         db.commit()
@@ -341,6 +342,119 @@ async def get_analysis(
         "txt": f"ID: {id} 的识别结果"
     }
     return response_data
+
+# GET /api/ocr/{id}
+@app.get("/api/ocr/{id}")
+async def get_ocr_result(
+    id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的OCR结果"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询OCR结果
+    ocr_result = db.query(OcrResult).filter(OcrResult.id == id).first()
+    
+    if not ocr_result:
+        raise HTTPException(status_code=404, detail="OCR结果不存在")
+    
+    return {
+        "success": True,
+        "data": {
+            "id": ocr_result.id,
+            "image_id": ocr_result.image_id,
+            "raw_text": ocr_result.raw_text,
+            "status": ocr_result.status.value,
+            "created_at": ocr_result.created_at.isoformat()
+        }
+    }
+
+# GET /api/user-images
+@app.get("/api/user-images")
+async def get_user_images(
+    user_id: int,
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """根据用户id 分页返回该用户对应的Image的id"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证用户存在
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 查询用户的图片，分页返回id
+    images = db.query(Image.id).filter(Image.user_id == user_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(Image).filter(Image.user_id == user_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [image[0] for image in images]
+        }
+    }
+
+# GET /api/image-ocr/{image_id}
+@app.get("/api/image-ocr-results/{image_id}")
+async def get_image_ocr_results(
+    image_id: int,
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """根据Image id 分页返回该Image对应的OcrResult的id"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证图片存在
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    
+    # 查询OCR结果，分页返回id
+    ocr_results = db.query(OcrResult.id).filter(OcrResult.image_id == image_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(OcrResult).filter(OcrResult.image_id == image_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [result[0] for result in ocr_results]
+        }
+    }
+
+# POST /api/image-ocr/{image_id}
+@app.post("/api/image-ocr/{image_id}")
+async def perform_image_ocr(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """根据Image id 执行OCR 结果保存在OcrResult表中"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    ocr_image_by_id(image_id, db)
+
 
 if __name__ == "__main__":
     import uvicorn

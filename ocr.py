@@ -2,7 +2,7 @@ from paddleocr import PaddleOCRVL
 import os
 import json
 import re
-from database import SessionLocal, Image, OcrResult, ImageStatus
+from database import SessionLocal, Image, OcrResult, OcrStatus
 
 
 def extract_text_content(json_file_path, text_save_path):
@@ -74,10 +74,17 @@ def ocr_image_by_id(image_id, db=None):
             return False
 
         try:
-            # 更新image的status为processing
-            image.status = ImageStatus.PROCESSING
+            # 创建 OcrResult，状态为 PROCESSING
+            ocr_result = OcrResult(
+                image_id=image_id,
+                raw_text="",
+                status=OcrStatus.PROCESSING
+            )
+            db.add(ocr_result)
             db.commit()
+            db.refresh(ocr_result)
 
+            # 执行 OCR 操作
             pipeline = PaddleOCRVL()
             output = pipeline.predict(input_file)
 
@@ -93,23 +100,18 @@ def ocr_image_by_id(image_id, db=None):
             cleaned_text = re.sub(r"\n{2,}", "\n", extracted_text)
             cleaned_text = cleaned_text.strip()
 
-            # 保存到数据库
-            ocr_result = OcrResult(
-                image_id=image_id,
-                raw_text=cleaned_text
-            )
-            db.add(ocr_result)
-
-            # 更新image的status为done
-            image.status = ImageStatus.DONE
+            # 更新 OcrResult 的内容和状态为 DONE
+            ocr_result.raw_text = cleaned_text
+            ocr_result.status = OcrStatus.DONE
             db.commit()
 
             return True
 
         except Exception as e:
-            # 更新image的status为failed
-            image.status = ImageStatus.FAILED
-            db.commit()
+            # 更新 OcrResult 的状态为 FAILED
+            if 'ocr_result' in locals():
+                ocr_result.status = OcrStatus.FAILED
+                db.commit()
             print(f"OCR处理过程中发生错误 -> {e}")
             return False
 

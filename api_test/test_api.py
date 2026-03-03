@@ -6,6 +6,7 @@ API 测试脚本
 import requests
 import json
 import os
+import time
 from pathlib import Path
 
 # API 基础地址
@@ -149,16 +150,10 @@ def test_upload():
         print_error("未获取到有效的token")
         return False
     
-    # 创建一个测试文件
-    test_file_path = "test_image.txt"
+    test_file_path = str(Path(__file__).parent / "test_img" / "test_img.jpg")
     try:
-        # 创建一个简单的测试文件（模拟图片）
-        with open(test_file_path, "w") as f:
-            f.write("This is a test image")
-        
-        # 上传文件但使用图片扩展名
         with open(test_file_path, "rb") as f:
-            files = {"image": ("test.png", f, "image/png")}
+            files = {"image": ("test_img.jpg", f, "image/jpeg")}
             headers = {
                 "Authorization": f"Bearer {access_token}"
             }
@@ -189,10 +184,6 @@ def test_upload():
     except Exception as e:
         print_error(f"请求失败: {str(e)}")
         return None
-    finally:
-        # 清理测试文件
-        if os.path.exists(test_file_path):
-            os.remove(test_file_path)
 
 def test_get_pic(image_id):
     """测试获取图片"""
@@ -247,6 +238,127 @@ def test_get_analysis(image_id):
         print_error(f"请求失败: {str(e)}")
         return False
 
+def test_get_user_images(user_id_param):
+    """测试获取用户的图片列表"""
+    print_test(f"测试 GET /api/user-images (user_id={user_id_param})")
+    if not access_token:
+        print_error("未获取到有效的token")
+        return False
+    
+    if not user_id_param:
+        print_error("未提供有效的用户ID")
+        return False
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        params = {
+            "user_id": user_id_param,
+            "skip": 0,
+            "limit": 10
+        }
+        response = requests.get(f"{BASE_URL}/api/user-images", headers=headers, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success"):
+                result_data = data.get("data", {})
+                total = result_data.get("total", 0)
+                ids = result_data.get("ids", [])
+                print_success(f"获取用户图片列表成功")
+                print_info(f"总数: {total}, 当前返回: {len(ids)} 个")
+                if ids:
+                    print_info(f"图片IDs: {ids}")
+                return True, ids if ids else []
+            else:
+                print_error(f"获取失败: {data.get('detail')}")
+                return False, []
+        else:
+            print_error(f"状态码: {response.status_code}")
+            return False, []
+    except Exception as e:
+        print_error(f"请求失败: {str(e)}")
+        return False, []
+
+def test_get_ocr_results(image_id):
+    """测试获取图片的OCR结果列表"""
+    print_test(f"测试 GET /api/image-ocr-results/{image_id}")
+    if not access_token:
+        print_error("未获取到有效的token")
+        return False
+    
+    if not image_id:
+        print_error("未提供有效的图片ID")
+        return False
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        params = {
+            "skip": 0,
+            "limit": 10
+        }
+        response = requests.get(f"{BASE_URL}/api/image-ocr-results/{image_id}", headers=headers, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success"):
+                result_data = data.get("data", {})
+                total = result_data.get("total", 0)
+                ids = result_data.get("ids", [])
+                print_success(f"获取图片的OCR结果列表成功")
+                print_info(f"总数: {total}, 当前返回: {len(ids)} 个")
+                if ids:
+                    print_info(f"OCR结果IDs: {ids}")
+                return True, ids if ids else []
+            else:
+                print_error(f"获取失败: {data.get('detail')}")
+                return False, []
+        else:
+            print_error(f"状态码: {response.status_code}")
+            return False, []
+    except Exception as e:
+        print_error(f"请求失败: {str(e)}")
+        return False, []
+
+def test_get_ocr_result(ocr_id):
+    """测试获取指定ID的OCR结果"""
+    print_test(f"测试 GET /api/ocr/{ocr_id}")
+    if not access_token:
+        print_error("未获取到有效的token")
+        return False
+    
+    if not ocr_id:
+        print_error("未提供有效的OCR结果ID")
+        return False
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        response = requests.get(f"{BASE_URL}/api/ocr/{ocr_id}", headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success"):
+                ocr_data = data.get("data", {})
+                print_success(f"获取OCR结果成功")
+                print_info(f"OCR ID: {ocr_data.get('id')}, 图片ID: {ocr_data.get('image_id')}")
+                text_preview = ocr_data.get('raw_text', '')[:50]
+                print_info(f"识别文本预览: {text_preview}...")
+                return True
+            else:
+                print_error(f"获取失败: {data.get('detail')}")
+                return False
+        else:
+            print_error(f"状态码: {response.status_code}")
+            return False
+    except Exception as e:
+        print_error(f"请求失败: {str(e)}")
+        return False
+
 def test_logout():
     """测试退出登录"""
     print_test("测试 POST /logout")
@@ -275,6 +387,124 @@ def test_logout():
         print_error(f"请求失败: {str(e)}")
         return False
 
+def test_perform_image_ocr(image_id):
+    """测试执行图片OCR"""
+    print_test(f"测试 POST /api/image-ocr/{image_id}")
+    if not access_token:
+        print_error("未获取到有效的token")
+        return False
+    
+    if not image_id:
+        print_error("未提供有效的图片ID")
+        return False
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        response = requests.post(f"{BASE_URL}/api/image-ocr/{image_id}", headers=headers)
+        
+        if response.status_code == 200:
+            print_success(f"OCR 执行成功")
+            return True
+        else:
+            print_error(f"状态码: {response.status_code}")
+            print_error(f"响应: {response.text}")
+            return False
+    except Exception as e:
+        print_error(f"请求失败: {str(e)}")
+        return False
+
+def test_wait_for_ocr_completion(image_id, timeout=60):
+    """等待OCR结果完成，每2秒检查一次"""
+    print_test(f"等待OCR结果完成 (image_id={image_id})")
+    if not access_token:
+        print_error("未获取到有效的token")
+        return False, None
+    
+    if not image_id:
+        print_error("未提供有效的图片ID")
+        return False, None
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        
+        # 首先获取OCR结果列表
+        start_time = time.time()
+        ocr_result_id = None
+        
+        # 循环等待直到找到OCR结果或超时
+        while time.time() - start_time < timeout:
+            try:
+                params = {
+                    "skip": 0,
+                    "limit": 10
+                }
+                response = requests.get(
+                    f"{BASE_URL}/api/image-ocr-results/{image_id}",
+                    headers=headers,
+                    params=params
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success"):
+                        result_data = data.get("data", {})
+                        ids = result_data.get("ids", [])
+                        if ids:
+                            ocr_result_id = ids[0]
+                            print_success(f"找到OCR结果 ID: {ocr_result_id}")
+                            break
+            except Exception as e:
+                print_info(f"获取OCR结果列表失败: {str(e)}")
+            
+            time.sleep(2)
+        
+        if not ocr_result_id:
+            print_error(f"在{timeout}秒内未找到OCR结果")
+            return False, None
+        
+        # 现在轮询检查OCR结果状态，直到完成或失败
+        print_info("开始轮询OCR结果状态...")
+        poll_start_time = time.time()
+        
+        while time.time() - poll_start_time < timeout:
+            try:
+                response = requests.get(
+                    f"{BASE_URL}/api/ocr/{ocr_result_id}",
+                    headers=headers
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success"):
+                        ocr_data = data.get("data", {})
+                        status = ocr_data.get("status")
+                        
+                        print_info(f"OCR 状态: {status}")
+                        
+                        if status == "done":
+                            text_preview = ocr_data.get('raw_text', '')[:100]
+                            print_success(f"OCR 完成! 识别文本预览: {text_preview}...")
+                            return True, ocr_result_id
+                        elif status == "failed":
+                            print_error(f"OCR 失败")
+                            return False, ocr_result_id
+                        # 其他状态(pending, processing)继续轮询
+            except Exception as e:
+                print_info(f"获取OCR结果详情失败: {str(e)}")
+            
+            time.sleep(2)
+        
+        print_error(f"轮询超时，OCR未完成")
+        return False, ocr_result_id
+        
+    except Exception as e:
+        print_error(f"请求失败: {str(e)}")
+        return False, None
+
 def main():
     """运行所有测试"""
     print(f"\n{Colors.BLUE}{'='*60}")
@@ -299,9 +529,35 @@ def main():
     if image_id:
         results["获取图片"] = test_get_pic(image_id)
         results["获取分析"] = test_get_analysis(image_id)
+        # 测试获取用户的图片列表
+        success, image_ids = test_get_user_images(user_id)
+        results["获取用户图片列表"] = success
+        
+        if image_ids and len(image_ids) > 0:
+            # 使用获取到的第一个图片ID执行OCR
+            test_image_id = image_ids[0]
+            print_info(f"使用图片ID {test_image_id} 执行OCR测试")
+            
+            # 执行OCR
+            ocr_executed = test_perform_image_ocr(test_image_id)
+            results["执行OCR"] = ocr_executed
+            
+            if ocr_executed:
+                # 等待OCR完成
+                success, ocr_result_id = test_wait_for_ocr_completion(test_image_id)
+                results["等待OCR完成"] = success
+            else:
+                results["等待OCR完成"] = False
+        else:
+            print_error("未获取到用户的图片列表，无法执行OCR测试")
+            results["执行OCR"] = False
+            results["等待OCR完成"] = False
     else:
         results["获取图片"] = False
         results["获取分析"] = False
+        results["获取用户图片列表"] = False
+        results["执行OCR"] = False
+        results["等待OCR完成"] = False
     
     results["退出登录"] = test_logout()
     

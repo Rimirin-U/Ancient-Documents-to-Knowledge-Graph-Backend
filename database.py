@@ -25,8 +25,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-class ImageStatus(str, Enum):
-    """图片状态枚举"""
+class OcrStatus(str, Enum):
+    """状态枚举"""
     PENDING = "pending"
     PROCESSING = "processing"
     DONE = "done"
@@ -55,7 +55,6 @@ class Image(Base):
     filename: Mapped[str] = mapped_column(String)
     path: Mapped[str] = mapped_column(String)
     upload_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    status: Mapped[ImageStatus] = mapped_column(SQLEnum(ImageStatus), default=ImageStatus.PENDING)
     
     # 关系
     user = relationship("User", back_populates="images")
@@ -69,6 +68,7 @@ class OcrResult(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     image_id: Mapped[int] = mapped_column(Integer, ForeignKey("image.id"), index=True)
     raw_text: Mapped[str] = mapped_column(String)
+    status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
     
     # 关系
