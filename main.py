@@ -15,9 +15,9 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 
 # JWT 配置
-SECRET_KEY = "your-secret-key-change-in-production"  # 生产环境应该改为环境变量
+SECRET_KEY = "temp"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60  # 24小时
+ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60 # 24h
 
 # 密码加密
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -44,11 +44,11 @@ class UserResponse(BaseModel):
 # 工具函数
 def hash_password(password: str) -> str:
     """加密密码"""
-    return pwd_context.hash(password)
+    return pwd_context.hash(password[:72])
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(plain_password[:72], hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """创建JWT token"""
@@ -181,7 +181,16 @@ async def read_root():
 
 # POST /api/upload
 @app.post("/api/upload")
-async def upload_image(image: UploadFile = File(...), user_id: int = 1, db: Session = Depends(get_db)):
+async def upload_image(
+    image: UploadFile = File(...), 
+    user_id: int = 1, 
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
     # 允许的文件扩展名
     ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
     # 文件大小限制：10MB
@@ -256,7 +265,15 @@ async def upload_image(image: UploadFile = File(...), user_id: int = 1, db: Sess
 
 # GET /api/pic/{id}
 @app.get("/api/pic/{id}")
-async def get_pic(id: int, db: Session = Depends(get_db)):
+async def get_pic(
+    id: int, 
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
     # 从数据库查询图片信息
     db_image = db.query(Image).filter(Image.id == id).first()
     if not db_image:
@@ -267,7 +284,14 @@ async def get_pic(id: int, db: Session = Depends(get_db)):
 
 # GET /api/analysis/{id}
 @app.get("/api/analysis/{id}")
-async def get_analysis(id: str):
+async def get_analysis(
+    id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
     response_data = {
         "nodes": [
             {

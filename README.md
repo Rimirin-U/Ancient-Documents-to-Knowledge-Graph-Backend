@@ -19,3 +19,9 @@ uvicorn main:app
 ```bash
 uvicorn main:app -reload
 ```
+
+## API测试
+
+```bash
+python api_test/test_api.py
+```
