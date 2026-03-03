@@ -2,6 +2,7 @@ from paddleocr import PaddleOCRVL
 import os
 import json
 import re
+from database import SessionLocal, Image, OcrResult, ImageStatus
 
 
 def extract_text_content(json_file_path, text_save_path):
@@ -45,52 +46,73 @@ def extract_text_content(json_file_path, text_save_path):
         return False
 
 
-def ocr_image_by_id(image_id):
+def ocr_image_by_id(image_id, db=None):
     """
-    输入：image_id
-    处理：./pic/{image_id}.{图片后缀}
-    输出：./output/text/{image_id}.txt
+    输入：image_id (Image表中的主键)
+    处理：从数据库中查找图片路径，执行OCR
+    输出：结果保存在OcrResult表中
     成功返回 True，失败返回 False
     """
-
-    pic_dir = "./pic"
-    output_json_dir = "./output"
-    output_text_dir = "./output/text"
-
-    # 查找图片
-    image_exts = [".jpg", ".png", ".jpeg", ".bmp", ".webp"]
-    input_file = None
-    for ext in image_exts:
-        candidate = os.path.join(pic_dir, f"{image_id}{ext}")
-        if os.path.exists(candidate):
-            input_file = candidate
-            break
-
-    if input_file is None:
-        print(f"错误：未找到图片文件 -> {image_id}")
-        return False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    else:
+        close_db = False
 
     try:
-        pipeline = PaddleOCRVL()
-        output = pipeline.predict(input_file)
+        # 从数据库查找图片记录
+        image = db.query(Image).filter(Image.id == image_id).first()
 
-        for res in output:
-            res.save_to_json(save_path=output_json_dir)
-
-        base_name_without_ext = os.path.splitext(os.path.basename(input_file))[0]
-        output_json_file = os.path.join(
-            output_json_dir, f"{base_name_without_ext}_res.json"
-        )
-        output_text_file = os.path.join(
-            output_text_dir, f"{image_id}.txt"
-        )
-
-        if not os.path.exists(output_json_file):
-            print(f"错误：未生成JSON文件 -> {output_json_file}")
+        if image is None:
+            print(f"错误：未找到图片记录 -> {image_id}")
             return False
 
-        return extract_text_content(output_json_file, output_text_file)
+        input_file = str(image.path)
 
-    except Exception as e:
-        print(f"OCR处理过程中发生错误 -> {e}")
-        return False
+        if not os.path.exists(input_file):
+            print(f"错误：图片文件不存在 -> {input_file}")
+            return False
+
+        try:
+            # 更新image的status为processing
+            image.status = ImageStatus.PROCESSING
+            db.commit()
+
+            pipeline = PaddleOCRVL()
+            output = pipeline.predict(input_file)
+
+            extracted_text = ""
+            for res in output:
+                # 从rec_texts字段提取文本
+                if hasattr(res, 'rec_texts'):
+                    for text in res.rec_texts:
+                        if text:  # 跳过空文本
+                            extracted_text += text + "\n"
+
+            # 清理文本
+            cleaned_text = re.sub(r"\n{2,}", "\n", extracted_text)
+            cleaned_text = cleaned_text.strip()
+
+            # 保存到数据库
+            ocr_result = OcrResult(
+                image_id=image_id,
+                raw_text=cleaned_text
+            )
+            db.add(ocr_result)
+
+            # 更新image的status为done
+            image.status = ImageStatus.DONE
+            db.commit()
+
+            return True
+
+        except Exception as e:
+            # 更新image的status为failed
+            image.status = ImageStatus.FAILED
+            db.commit()
+            print(f"OCR处理过程中发生错误 -> {e}")
+            return False
+
+    finally:
+        if close_db:
+            db.close()

@@ -1,3 +1,7 @@
+## Python
+
+`python 3.12.9`
+
 ## 安装依赖
 
 ```bash

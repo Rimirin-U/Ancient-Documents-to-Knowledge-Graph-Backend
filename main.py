@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from database import init_db, get_db, Image
+from database import init_db, get_db, Image, ImageStatus
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 app = FastAPI()
@@ -88,7 +88,7 @@ async def upload_image(image: UploadFile = File(...), user_id: int = 1, db: Sess
             filename=unique_filename,
             path=file_path,
             upload_time=datetime.now(timezone.utc),
-            status="pending"
+            status=ImageStatus.PENDING
         )
         db.add(db_image)
         db.commit()

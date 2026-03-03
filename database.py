@@ -2,10 +2,10 @@
 数据库初始化模块
 """
 import os
+from enum import Enum
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, mapped_column, Mapped
 
 # 数据库路径
 DB_DIR = "database"
@@ -25,15 +25,23 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+class ImageStatus(str, Enum):
+    """图片状态枚举"""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DONE = "done"
+    FAILED = "failed"
+
+
 class User(Base):
     """用户表"""
     __tablename__ = "user"
     
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    email = Column(String, unique=True, index=True)
-    password_hash = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String, unique=True, index=True)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     # 关系
     images = relationship("Image", back_populates="user")
@@ -43,12 +51,12 @@ class Image(Base):
     """图像表"""
     __tablename__ = "image"
     
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("user.id"), index=True)
-    filename = Column(String)
-    path = Column(String)
-    upload_time = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="pending")  # pending / processing / done / failed
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), index=True)
+    filename: Mapped[str] = mapped_column(String)
+    path: Mapped[str] = mapped_column(String)
+    upload_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    status: Mapped[ImageStatus] = mapped_column(SQLEnum(ImageStatus), default=ImageStatus.PENDING)
     
     # 关系
     user = relationship("User", back_populates="images")
@@ -59,10 +67,10 @@ class OcrResult(Base):
     """OCR结果表"""
     __tablename__ = "ocr_result"
     
-    id = Column(Integer, primary_key=True, index=True)
-    image_id = Column(Integer, ForeignKey("image.id"), index=True)
-    raw_text = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    image_id: Mapped[int] = mapped_column(Integer, ForeignKey("image.id"), index=True)
+    raw_text: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     # 关系
     image = relationship("Image", back_populates="ocr_results")
