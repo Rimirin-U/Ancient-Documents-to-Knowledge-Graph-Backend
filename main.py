@@ -176,12 +176,12 @@ async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
         "message": "logout ok"
     }
 
-# GET
+# GET /api - 测试接口
 @app.get("/api")
 async def read_root():
     return "Hello, World!"
 
-# POST /api/upload
+# POST /api/upload - 上传图片
 @app.post("/api/upload")
 async def upload_image(
     image: UploadFile = File(...), 
@@ -264,7 +264,7 @@ async def upload_image(
             pass
         return {"success": False, "message": f"保存到数据库失败: {str(e)}"}
 
-# GET /api/pic/{id}
+# GET /api/pic/{id} - 获取图片
 @app.get("/api/pic/{id}")
 async def get_pic(
     id: int, 
@@ -283,7 +283,7 @@ async def get_pic(
         raise HTTPException(status_code=404, detail="image file not found")
     return FileResponse(str(db_image.path))
 
-# GET /api/analysis/{id}
+# GET /api/analysis/{id} - 获取分析结果（弃用）
 @app.get("/api/analysis/{id}")
 async def get_analysis(
     id: str,
@@ -343,7 +343,7 @@ async def get_analysis(
     }
     return response_data
 
-# GET /api/ocr/{id}
+# GET /api/ocr/{id} - 获取OCR结果
 @app.get("/api/ocr/{id}")
 async def get_ocr_result(
     id: int,
@@ -372,7 +372,7 @@ async def get_ocr_result(
         }
     }
 
-# GET /api/user-images
+# GET /api/user-images - 获取用户的图片列表
 @app.get("/api/user-images")
 async def get_user_images(
     user_id: int,
@@ -407,7 +407,7 @@ async def get_user_images(
         }
     }
 
-# GET /api/image-ocr/{image_id}
+# GET /api/image-ocr-results/{image_id} - 获取图片的OCR结果列表
 @app.get("/api/image-ocr-results/{image_id}")
 async def get_image_ocr_results(
     image_id: int,
@@ -442,7 +442,7 @@ async def get_image_ocr_results(
         }
     }
 
-# POST /api/image-ocr/{image_id}
+# POST /api/image-ocr/{image_id} - 对指定图片执行OCR
 @app.post("/api/image-ocr/{image_id}")
 async def perform_image_ocr(
     image_id: int,
