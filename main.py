@@ -5,11 +5,71 @@ import uuid
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from database import init_db, get_db, Image, ImageStatus
+from database import init_db, get_db, Image, ImageStatus, User
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel
+
+# JWT 配置
+SECRET_KEY = "your-secret-key-change-in-production"  # 生产环境应该改为环境变量
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60  # 24小时
+
+# 密码加密
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer scheme
+security = HTTPBearer()
+
 app = FastAPI()
+
+# Pydantic 模型
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    created_at: datetime
+
+# 工具函数
+def hash_password(password: str) -> str:
+    """加密密码"""
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """验证密码"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """创建JWT token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> dict:
+    """验证JWT token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token已过期")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token无效")
 
 # 在应用启动时初始化数据库
 init_db()
@@ -30,11 +90,94 @@ if not os.path.exists(UPLOAD_DIR):
 
 # 路由
 
-# GET /api
+# POST /register - 注册
+@app.post("/register")
+async def register(request: RegisterRequest, db: Session = Depends(get_db)):
+    # 检查用户是否已存在
+    existing_user = db.query(User).filter(User.username == request.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    
+    # 创建新用户
+    hashed_password = hash_password(request.password)
+    db_user = User(
+        username=request.username,
+        password_hash=hashed_password,
+        created_at=datetime.now(timezone.utc)
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    
+    return {
+        "success": True,
+        "message": "注册成功",
+        "userId": db_user.id,
+        "username": db_user.username
+    }
+
+# POST /login - 登录
+@app.post("/login")
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    # 查询用户
+    db_user = db.query(User).filter(User.username == request.username).first()
+    if not db_user or not verify_password(request.password, db_user.password_hash):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    
+    # 生成JWT token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": db_user.username, "user_id": db_user.id},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "success": True,
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": db_user.id,
+        "username": db_user.username
+    }
+
+# GET /user/info - 获取用户信息
+@app.get("/user/info")
+async def get_user_info(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    token = credentials.credentials
+    
+    # 验证token
+    payload = verify_token(token)
+    username = payload.get("sub")
+    
+    # 查询用户
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    return {
+        "success": True,
+        "user": {
+            "id": db_user.id,
+            "username": db_user.username,
+            "created_at": db_user.created_at.isoformat()
+        }
+    }
+
+# POST /logout - 退出登录
+@app.post("/logout")
+async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    return {
+        "success": True,
+        "message": "logout ok"
+    }
+
+# GET
 @app.get("/api")
 async def read_root():
     return "Hello, World!"
-
 
 # POST /api/upload
 @app.post("/api/upload")

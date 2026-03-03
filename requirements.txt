@@ -8,3 +8,8 @@ uvicorn
 python-dotenv
 dashscope       # 旧提取
 paddleocr
+pyjwt
+python-jose
+passlib
+bcrypt
+python-multipart
