@@ -1,12 +1,18 @@
+
 import os
-import time
 import shutil
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import uuid
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-
+from database import init_db, get_db, Image
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 app = FastAPI()
+
+# 在应用启动时初始化数据库
+init_db()
 
 # CORS
 app.add_middleware(
@@ -29,38 +35,94 @@ if not os.path.exists(UPLOAD_DIR):
 async def read_root():
     return "Hello, World!"
 
+
 # POST /api/upload
 @app.post("/api/upload")
-async def upload_image(image: UploadFile = File(...)):
-    # 获取文件后缀
-    ext = os.path.splitext(image.filename or "")[1]
-    # 生成时间戳文件名
-    analysis_id = str(int(time.time() * 1000))
-    file_name = f"{analysis_id}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, file_name)
+async def upload_image(image: UploadFile = File(...), user_id: int = 1, db: Session = Depends(get_db)):
+    # 允许的文件扩展名
+    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
+    # 文件大小限制：10MB
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB   
+    # 验证文件扩展名
+    ext = os.path.splitext(image.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return {
+            "success": False, 
+            "message": f"不支持的文件类型。允许的类型: {', '.join(ALLOWED_EXTENSIONS)}"
+        }
+    
+    # 读取文件数据并验证大小
+    try:
+        file_data = await image.read()
+        file_size = len(file_data)
+        
+        # 验证文件大小
+        if file_size > MAX_FILE_SIZE:
+            return {
+                "success": False,
+                "message": f"文件过大。最大允许大小: 10MB, 当前大小: {file_size / 1024 / 1024:.2f}MB"
+            }
+        
+        if file_size == 0:
+            return {
+                "success": False,
+                "message": "文件为空"
+            }
+    except Exception as e:
+        return {"success": False, "message": f"读取文件失败: {str(e)}"}
+    # 生成唯一文件名
+    original_name = os.path.splitext(image.filename or "upload")[0]
+    unique_filename = f"{original_name}_{uuid.uuid4().hex[:8]}{ext}"
+    file_path = os.path.join(UPLOAD_DIR, unique_filename)
     # 保存文件到磁盘
     try:
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
+            buffer.write(file_data)
     except Exception as e:
-        return {"success": False, "message": str(e)}
-    return {
-        "success": True,
-        "analysisId": analysis_id
-    }
+        return {"success": False, "message": f"保存文件失败: {str(e)}"}
+    
+    # 保存图片信息到数据库
+    try:
+        db_image = Image(
+            user_id=user_id,
+            filename=unique_filename,
+            path=file_path,
+            upload_time=datetime.now(timezone.utc),
+            status="pending"
+        )
+        db.add(db_image)
+        db.commit()
+        db.refresh(db_image)
+        
+        return {
+            "success": True,
+            "imageId": db_image.id,
+            "filename": db_image.filename,
+            "originalName": image.filename,
+            "fileSize": file_size
+        }
+    except Exception as e:
+        db.rollback()
+        # 删除已保存的文件
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except:
+            pass
+        return {"success": False, "message": f"保存到数据库失败: {str(e)}"}
 
-# GET /api/pic/:id
+# GET /api/pic/{id}
 @app.get("/api/pic/{id}")
-async def get_pic(id: str):
-    # 在目录下查找以 id 开头的文件
-    files = os.listdir(UPLOAD_DIR)
-    file_name = next((f for f in files if f.startswith(id)), None)
-    if not file_name:
+async def get_pic(id: int, db: Session = Depends(get_db)):
+    # 从数据库查询图片信息
+    db_image = db.query(Image).filter(Image.id == id).first()
+    if not db_image:
         raise HTTPException(status_code=404, detail="image not found")
-    file_path = os.path.join(UPLOAD_DIR, file_name)
-    return FileResponse(file_path)
+    if not os.path.exists(str(db_image.path)):
+        raise HTTPException(status_code=404, detail="image file not found")
+    return FileResponse(str(db_image.path))
 
-# GET /api/analysis/:id
+# GET /api/analysis/{id}
 @app.get("/api/analysis/{id}")
 async def get_analysis(id: str):
     response_data = {

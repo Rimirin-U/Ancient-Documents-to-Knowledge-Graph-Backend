@@ -1,6 +1,8 @@
 pic/
 input/
 output/
+database/*.db
+upload/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
