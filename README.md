@@ -25,4 +25,4 @@ uvicorn main:app -reload
 ```bash
 python api_test/test_api.py
 ```
-# 欢迎来到我们的古籍知识图谱项目！同步测试
+# 欢迎来到我们的古籍知识图谱项目！同步测试2
