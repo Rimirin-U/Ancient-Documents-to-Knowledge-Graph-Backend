@@ -2,7 +2,7 @@
 import os
 import shutil
 import uuid
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -43,6 +43,10 @@ class UserResponse(BaseModel):
     username: str
     created_at: datetime
 
+class UpdateUserRequest(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+
 # 工具函数
 def hash_password(password: str) -> str:
     """加密密码"""
@@ -73,7 +77,7 @@ def verify_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token无效")
 
-# 在应用启动时初始化数据库
+# 数据库初始化
 init_db()
 
 # CORS
@@ -90,10 +94,26 @@ UPLOAD_DIR = "pic"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-# 路由
 
-# POST /register - 注册
-@app.post("/register")
+# 路由分组
+
+# 认证路由
+auth_router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
+
+# 用户路由
+users_router = APIRouter(prefix="/api/v1/users", tags=["用户管理"])
+
+# 图片路由
+images_router = APIRouter(prefix="/api/v1/images", tags=["图片管理"])
+
+# OCR路由
+ocr_router = APIRouter(prefix="/api/v1/ocr-results", tags=["OCR结果"])
+
+
+# 认证路由
+
+# POST /api/v1/auth/register - 注册
+@auth_router.post("/register")
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     # 检查用户是否已存在
     existing_user = db.query(User).filter(User.username == request.username).first()
@@ -118,8 +138,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         "username": db_user.username
     }
 
-# POST /login - 登录
-@app.post("/login")
+# POST /api/v1/auth/login - 登录
+@auth_router.post("/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     # 查询用户
     db_user = db.query(User).filter(User.username == request.username).first()
@@ -141,8 +161,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "username": db_user.username
     }
 
-# GET /user/info - 获取用户信息
-@app.get("/user/info")
+# GET /api/v1/auth/user/info - 获取用户信息
+@users_router.get("/me")
 async def get_user_info(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
     token = credentials.credentials
     
@@ -164,8 +184,8 @@ async def get_user_info(credentials: HTTPAuthorizationCredentials = Depends(secu
         }
     }
 
-# POST /logout - 退出登录
-@app.post("/logout")
+# GET /api/v1/auth/logout - 退出登录
+@auth_router.post("/logout")
 async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
     # 验证token
     token = credentials.credentials
@@ -176,13 +196,84 @@ async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
         "message": "logout ok"
     }
 
+# POST /api/v1/auth/refresh - 刷新token
+@auth_router.post("/refresh")
+async def refresh_token(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """刷新JWT token"""
+    token = credentials.credentials
+    
+    # 验证token
+    payload = verify_token(token)
+    username = payload.get("sub")
+    user_id = payload.get("user_id")
+    
+    # 查询用户确认存在
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 生成新的JWT token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    new_access_token = create_access_token(
+        data={"sub": db_user.username, "user_id": db_user.id},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "success": True,
+        "access_token": new_access_token,
+        "token_type": "bearer"
+    }
+
+# PUT /api/v1/users/me - 更新个人信息
+@users_router.put("/me")
+async def update_user_info(request: UpdateUserRequest, credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """更新用户信息"""
+    token = credentials.credentials
+    
+    # 验证token
+    payload = verify_token(token)
+    username = payload.get("sub")
+    
+    # 查询用户
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 更新用户信息
+    if request.username:
+        # 检查新用户名是否已存在
+        existing_user = db.query(User).filter(User.username == request.username, User.id != db_user.id).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="用户名已存在")
+        db_user.username = request.username
+    
+    if request.password:
+        db_user.password_hash = hash_password(request.password)
+    
+    db.commit()
+    db.refresh(db_user)
+    
+    return {
+        "success": True,
+        "message": "更新成功",
+        "user": {
+            "id": db_user.id,
+            "username": db_user.username,
+            "created_at": db_user.created_at.isoformat()
+        }
+    }
+
 # GET /api - 测试接口
 @app.get("/api")
 async def read_root():
     return "Hello, World!"
 
-# POST /api/upload - 上传图片
-@app.post("/api/upload")
+
+# 图片路由 
+
+# POST /api/v1/images/upload - 上传图片
+@images_router.post("/upload")
 async def upload_image(
     image: UploadFile = File(...), 
     user_id: int = 1, 
@@ -264,10 +355,10 @@ async def upload_image(
             pass
         return {"success": False, "message": f"保存到数据库失败: {str(e)}"}
 
-# GET /api/pic/{id} - 获取图片
-@app.get("/api/pic/{id}")
+# GET /api/v1/images/{image_id} - 获取图片
+@images_router.get("/{image_id}")
 async def get_pic(
-    id: int, 
+    image_id: int, 
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
@@ -276,115 +367,26 @@ async def get_pic(
     verify_token(token)
     
     # 从数据库查询图片信息
-    db_image = db.query(Image).filter(Image.id == id).first()
+    db_image = db.query(Image).filter(Image.id == image_id).first()
     if not db_image:
         raise HTTPException(status_code=404, detail="image not found")
     if not os.path.exists(str(db_image.path)):
         raise HTTPException(status_code=404, detail="image file not found")
     return FileResponse(str(db_image.path))
 
-# GET /api/analysis/{id} - 获取分析结果（弃用）
-@app.get("/api/analysis/{id}")
-async def get_analysis(
-    id: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    # 验证token
-    token = credentials.credentials
-    verify_token(token)
-    
-    response_data = {
-        "nodes": [
-            {
-                "id": id,
-                "name": "劉永濟",
-                "type": "person",
-                "category": "立約人",
-                "symbolSize": 40,
-                "itemStyle": {
-                    "color": "#5470c6",
-                    "borderColor": "#fff",
-                    "borderWidth": 2,
-                    "shadowBlur": 10,
-                    "shadowColor": "rgba(0, 0, 0, 0.3)"
-                }
-            },
-            {
-                "id": "file2_node1",
-                "name": "白田四形",
-                "type": "object",
-                "category": "标的",
-                "symbolSize": 35,
-                "itemStyle": {
-                    "color": "#91cc75",
-                    "borderColor": "#fff",
-                    "borderWidth": 2,
-                    "shadowBlur": 10,
-                    "shadowColor": "rgba(0, 0, 0, 0.3)"
-                }
-            }
-        ],
-        "links": [
-            {
-                "source": id,
-                "target": "file2_node1",
-                "value": "出让",
-                "lineStyle": {
-                    "color": "#ff0000",
-                    "width": 2
-                }
-            }
-        ],
-        "categories": [
-            {"name": "立約人"},
-            {"name": "标的"}
-        ],
-        "txt": f"ID: {id} 的识别结果"
-    }
-    return response_data
-
-# GET /api/ocr/{id} - 获取OCR结果
-@app.get("/api/ocr/{id}")
-async def get_ocr_result(
-    id: int,
-    db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    """获取指定id的OCR结果"""
-    # 验证token
-    token = credentials.credentials
-    verify_token(token)
-    
-    # 查询OCR结果
-    ocr_result = db.query(OcrResult).filter(OcrResult.id == id).first()
-    
-    if not ocr_result:
-        raise HTTPException(status_code=404, detail="OCR结果不存在")
-    
-    return {
-        "success": True,
-        "data": {
-            "id": ocr_result.id,
-            "image_id": ocr_result.image_id,
-            "raw_text": ocr_result.raw_text,
-            "status": ocr_result.status.value,
-            "created_at": ocr_result.created_at.isoformat()
-        }
-    }
-
-# GET /api/user-images - 获取用户的图片列表
-@app.get("/api/user-images")
+# GET /api/v1/users/images - 获取当前用户的图片列表
+@users_router.get("/images")
 async def get_user_images(
-    user_id: int,
     skip: int = 0,
     limit: int = 10,
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
-    """根据用户id 分页返回该用户对应的Image的id"""
+    """获取当前用户的图片列表"""
     # 验证token
     token = credentials.credentials
-    verify_token(token)
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
     
     # 验证用户存在
     user = db.query(User).filter(User.id == user_id).first()
@@ -407,8 +409,65 @@ async def get_user_images(
         }
     }
 
-# GET /api/image-ocr-results/{image_id} - 获取图片的OCR结果列表
-@app.get("/api/image-ocr-results/{image_id}")
+
+# OCR路由
+
+# POST /api/v1/images/{image_id}/ocr - 对图片执行OCR
+@images_router.post("/{image_id}/ocr")
+async def perform_image_ocr(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """对指定的图片执行OCR"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证图片存在
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    
+    # 执行OCR
+    ocr_image_by_id(image_id, db)
+    
+    return {
+        "success": True,
+        "message": f"图片 {image_id} 的OCR已添加到处理队列"
+    }
+
+# GET /api/v1/ocr-results/{ocr_id} - 获取特定OCR结果
+@ocr_router.get("/{ocr_id}")
+async def get_ocr_result(
+    ocr_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的OCR结果"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询OCR结果
+    ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_id).first()
+    
+    if not ocr_result:
+        raise HTTPException(status_code=404, detail="OCR结果不存在")
+    
+    return {
+        "success": True,
+        "data": {
+            "id": ocr_result.id,
+            "image_id": ocr_result.image_id,
+            "raw_text": ocr_result.raw_text,
+            "status": ocr_result.status.value,
+            "created_at": ocr_result.created_at.isoformat()
+        }
+    }
+
+# GET /api/v1/images/{image_id}/ocr-results - 获取图片的OCR结果列表
+@images_router.get("/{image_id}/ocr-results")
 async def get_image_ocr_results(
     image_id: int,
     skip: int = 0,
@@ -416,7 +475,7 @@ async def get_image_ocr_results(
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
-    """根据Image id 分页返回该Image对应的OcrResult的id"""
+    """获取图片的OCR结果列表"""
     # 验证token
     token = credentials.credentials
     verify_token(token)
@@ -442,19 +501,13 @@ async def get_image_ocr_results(
         }
     }
 
-# POST /api/image-ocr/{image_id} - 对指定图片执行OCR
-@app.post("/api/image-ocr/{image_id}")
-async def perform_image_ocr(
-    image_id: int,
-    db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    """根据Image id 执行OCR 结果保存在OcrResult表中"""
-    # 验证token
-    token = credentials.credentials
-    verify_token(token)
-    ocr_image_by_id(image_id, db)
 
+# 路由注册 
+
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(images_router)
+app.include_router(ocr_router)
 
 if __name__ == "__main__":
     import uvicorn
