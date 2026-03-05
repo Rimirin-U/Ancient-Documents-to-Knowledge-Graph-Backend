@@ -1,4 +1,5 @@
 
+print("Loading main.py...")
 import os
 import shutil
 import uuid
@@ -14,9 +15,9 @@ import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
-from ocr import ocr_image_by_id
-from extract import extract_entities_relations_with_qwen, save_extraction_to_db
-from analysis import SocialNetworkAnalyzer
+# from ocr import ocr_image_by_id
+# from extract import extract_entities_relations_with_qwen, save_extraction_to_db
+# from analysis import SocialNetworkAnalyzer
 
 # JWT 配置
 SECRET_KEY = "temp"
@@ -29,7 +30,13 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # HTTP Bearer scheme
 security = HTTPBearer()
 
-app = FastAPI()
+app = FastAPI(
+    title="古籍文书知识图谱构建系统",
+    description="一个基于深度学习和自然语言处理的后端系统，用于对古代契约文书进行OCR识别、知识抽取、翻译及社会关系网络分析。",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 # Pydantic 模型
 class RegisterRequest(BaseModel):
@@ -192,13 +199,13 @@ async def get_user_info(credentials: HTTPAuthorizationCredentials = Depends(secu
 # GET /api/v1/auth/logout - 退出登录
 @auth_router.post("/logout")
 async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # 验证token
+    # 验证 token
     token = credentials.credentials
     verify_token(token)
     
     return {
         "success": True,
-        "message": "logout ok"
+        "message": "退出登录成功"
     }
 
 # POST /api/v1/auth/refresh - 刷新token
@@ -270,9 +277,9 @@ async def update_user_info(request: UpdateUserRequest, credentials: HTTPAuthoriz
     }
 
 # GET /api - 测试接口
-@app.get("/api")
+@app.get("/api", tags=["系统测试"])
 async def read_root():
-    return "Hello, World!"
+    return {"message": "服务运行正常", "timestamp": datetime.now().isoformat()}
 
 
 # 图片路由 
@@ -374,9 +381,9 @@ async def get_pic(
     # 从数据库查询图片信息
     db_image = db.query(Image).filter(Image.id == image_id).first()
     if not db_image:
-        raise HTTPException(status_code=404, detail="image not found")
+        raise HTTPException(status_code=404, detail="未找到图片记录")
     if not os.path.exists(str(db_image.path)):
-        raise HTTPException(status_code=404, detail="image file not found")
+        raise HTTPException(status_code=404, detail="图片文件丢失")
     return FileResponse(str(db_image.path))
 
 # GET /api/v1/users/images - 获取当前用户的图片列表
@@ -435,6 +442,7 @@ async def perform_image_ocr(
         raise HTTPException(status_code=404, detail="图片不存在")
     
     # 执行OCR
+    from ocr import ocr_image_by_id
     ocr_image_by_id(image_id, db)
     
     return {
@@ -526,6 +534,7 @@ async def extract_knowledge(
         raise HTTPException(status_code=400, detail="该图片尚无OCR结果，请先执行OCR")
     
     # 2. 调用 LLM 抽取
+    from extract import extract_entities_relations_with_qwen, save_extraction_to_db
     extraction = extract_entities_relations_with_qwen(ocr_result.raw_text)
     
     # 3. 存入数据库
@@ -549,6 +558,7 @@ async def get_social_graph(
     """
     verify_token(credentials.credentials)
     
+    from analysis import SocialNetworkAnalyzer
     analyzer = SocialNetworkAnalyzer(db)
     analyzer.build_graph()
     power_structure = analyzer.analyze_power_structure()

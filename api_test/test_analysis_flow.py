@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 # API 基础地址
-BASE_URL = "http://localhost:3000"
+BASE_URL = "http://127.0.0.1:8000"
 
 # 测试用户 (使用已存在的用户或新注册)
 TEST_USERNAME = "test_analysis_user"
@@ -31,6 +31,9 @@ def login_or_register():
     
     # 1. Try Login
     print_info("尝试登录...")
+    # Disable proxy for localhost
+    os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+    
     resp = requests.post(f"{BASE_URL}/api/v1/auth/login", json={"username": TEST_USERNAME, "password": TEST_PASSWORD})
     
     if resp.status_code == 200 and resp.json().get("success"):
