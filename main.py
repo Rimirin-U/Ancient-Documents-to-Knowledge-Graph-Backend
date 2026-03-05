@@ -7,7 +7,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from database import init_db, get_db, Image, User, OcrResult
+from database import (
+    init_db, get_db, Image, User, OcrResult, 
+    StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
+    MultiTaskStructuredResult
+)
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -46,6 +50,18 @@ class UserResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
+
+class CreateStructuredResultRequest(BaseModel):
+    ocr_result_id: int
+
+class CreateRelationGraphRequest(BaseModel):
+    structured_result_id: int
+
+class CreateMultiTaskRequest(BaseModel):
+    structured_result_ids: list[int]
+
+class CreateMultiRelationGraphRequest(BaseModel):
+    multi_task_id: int
 
 # 工具函数
 def hash_password(password: str) -> str:
@@ -108,6 +124,18 @@ images_router = APIRouter(prefix="/api/v1/images", tags=["图片管理"])
 
 # OCR路由
 ocr_router = APIRouter(prefix="/api/v1/ocr-results", tags=["OCR结果"])
+
+# 结构化结果路由
+structured_result_router = APIRouter(prefix="/api/v1/structured-results", tags=["结构化结果"])
+
+# 关系图路由
+relation_graph_router = APIRouter(prefix="/api/v1/relation-graphs", tags=["关系图"])
+
+# 多任务路由
+multi_task_router = APIRouter(prefix="/api/v1/multi-tasks", tags=["多任务分析"])
+
+# 跨文档关系图路由
+multi_relation_graph_router = APIRouter(prefix="/api/v1/multi-relation-graphs", tags=["跨文档关系图"])
 
 
 # 认证路由
@@ -502,12 +530,440 @@ async def get_image_ocr_results(
     }
 
 
-# 路由注册 
+# 结构化结果路由
+
+# POST /api/v1/structured-results - 对指定OcrResult进行分析
+@structured_result_router.post("")
+async def create_structured_result(
+    request: CreateStructuredResultRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """对指定的OcrResult进行结构化分析"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证OcrResult存在
+    ocr_result = db.query(OcrResult).filter(OcrResult.id == request.ocr_result_id).first()
+    if not ocr_result:
+        raise HTTPException(status_code=404, detail="OcrResult不存在")
+    
+    # 调用分析函数（异步处理）
+    from analysis import analyze_ocr_result
+    analyze_ocr_result(request.ocr_result_id, db)
+    
+    return {
+        "success": True,
+        "message": f"OcrResult {request.ocr_result_id} 的结构化分析已添加到处理队列"
+    }
+
+# GET /api/v1/structured-results/{structured_result_id} - 获取指定StructuredResult
+@structured_result_router.get("/{structured_result_id}")
+async def get_structured_result(
+    structured_result_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的结构化结果"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询结构化结果
+    structured_result = db.query(StructuredResult).filter(StructuredResult.id == structured_result_id).first()
+    
+    if not structured_result:
+        raise HTTPException(status_code=404, detail="StructuredResult不存在")
+    
+    # 解析JSON内容
+    import json
+    try:
+        content = json.loads(structured_result.content)
+    except:
+        content = structured_result.content
+    
+    return {
+        "success": True,
+        "data": {
+            "id": structured_result.id,
+            "ocr_result_id": structured_result.ocr_result_id,
+            "content": content,
+            "status": structured_result.status.value,
+            "created_at": structured_result.created_at.isoformat()
+        }
+    }
+
+# GET /api/v1/ocr-results/{ocr_result_id}/structured-results - 获取指定OcrResult的StructuredResult列表
+@ocr_router.get("/{ocr_result_id}/structured-results")
+async def get_ocr_structured_results(
+    ocr_result_id: int,
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定OcrResult的结构化结果列表"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证OcrResult存在
+    ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_result_id).first()
+    if not ocr_result:
+        raise HTTPException(status_code=404, detail="OcrResult不存在")
+    
+    # 查询结构化结果，分页返回id
+    structured_results = db.query(StructuredResult.id).filter(StructuredResult.ocr_result_id == ocr_result_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(StructuredResult).filter(StructuredResult.ocr_result_id == ocr_result_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [result[0] for result in structured_results]
+        }
+    }
+
+
+# 关系图路由
+
+# POST /api/v1/relation-graphs - 对指定StructuredResult进行分析
+@relation_graph_router.post("")
+async def create_relation_graph(
+    request: CreateRelationGraphRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """对指定的StructuredResult进行关系图分析"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证StructuredResult存在
+    structured_result = db.query(StructuredResult).filter(StructuredResult.id == request.structured_result_id).first()
+    if not structured_result:
+        raise HTTPException(status_code=404, detail="StructuredResult不存在")
+    
+    # 调用分析函数（异步处理）
+    from analysis import analyze_structured_result
+    analyze_structured_result(request.structured_result_id, db)
+    
+    return {
+        "success": True,
+        "message": f"StructuredResult {request.structured_result_id} 的关系图分析已添加到处理队列"
+    }
+
+# GET /api/v1/relation-graphs/{relation_graph_id} - 获取指定RelationGraph
+@relation_graph_router.get("/{relation_graph_id}")
+async def get_relation_graph(
+    relation_graph_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的关系图结果"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询关系图结果
+    relation_graph = db.query(RelationGraph).filter(RelationGraph.id == relation_graph_id).first()
+    
+    if not relation_graph:
+        raise HTTPException(status_code=404, detail="RelationGraph不存在")
+    
+    # 解析JSON内容
+    import json
+    try:
+        content = json.loads(relation_graph.content)
+    except:
+        content = relation_graph.content
+    
+    return {
+        "success": True,
+        "data": {
+            "id": relation_graph.id,
+            "structured_result_id": relation_graph.structured_result_id,
+            "content": content,
+            "status": relation_graph.status.value,
+            "created_at": relation_graph.created_at.isoformat()
+        }
+    }
+
+# GET /api/v1/structured-results/{structured_result_id}/relation-graphs - 获取指定StructuredResult的RelationGraph列表
+@structured_result_router.get("/{structured_result_id}/relation-graphs")
+async def get_structured_result_relation_graphs(
+    structured_result_id: int,
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定StructuredResult的关系图列表"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证StructuredResult存在
+    structured_result = db.query(StructuredResult).filter(StructuredResult.id == structured_result_id).first()
+    if not structured_result:
+        raise HTTPException(status_code=404, detail="StructuredResult不存在")
+    
+    # 查询关系图结果，分页返回id
+    relation_graphs = db.query(RelationGraph.id).filter(RelationGraph.structured_result_id == structured_result_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(RelationGraph).filter(RelationGraph.structured_result_id == structured_result_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [graph[0] for graph in relation_graphs]
+        }
+    }
+
+
+# 多任务路由
+
+# POST /api/v1/multi-tasks - 创建跨文档分析任务
+@multi_task_router.post("")
+async def create_multi_task(
+    request: CreateMultiTaskRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """创建跨文档分析任务"""
+    # 验证token
+    token = credentials.credentials
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
+    
+    # 验证用户存在
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 验证所有StructuredResult存在
+    for sr_id in request.structured_result_ids:
+        sr = db.query(StructuredResult).filter(StructuredResult.id == sr_id).first()
+        if not sr:
+            raise HTTPException(status_code=404, detail=f"StructuredResult {sr_id} 不存在")
+    
+    # 创建MultiTask
+    try:
+        multi_task = MultiTask(
+            user_id=user_id,
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(multi_task)
+        db.commit()
+        db.refresh(multi_task)
+        
+        # 创建关联关系
+        for sr_id in request.structured_result_ids:
+            association = MultiTaskStructuredResult(
+                multi_task_id=multi_task.id,
+                structured_result_id=sr_id,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(association)
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "多任务创建成功",
+            "multi_task_id": multi_task.id,
+            "structured_result_ids": request.structured_result_ids,
+            "created_at": multi_task.created_at.isoformat()
+        }
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "message": f"创建失败: {str(e)}"}
+
+# GET /api/v1/multi-tasks/{multi_task_id} - 获取指定MultiTask
+@multi_task_router.get("/{multi_task_id}")
+async def get_multi_task(
+    multi_task_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的多任务"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询多任务
+    multi_task = db.query(MultiTask).filter(MultiTask.id == multi_task_id).first()
+    
+    if not multi_task:
+        raise HTTPException(status_code=404, detail="MultiTask不存在")
+    
+    # 查询关联的StructuredResult
+    associations = db.query(MultiTaskStructuredResult).filter(MultiTaskStructuredResult.multi_task_id == multi_task_id).all()
+    sr_ids = [assoc.structured_result_id for assoc in associations]
+    
+    return {
+        "success": True,
+        "data": {
+            "id": multi_task.id,
+            "user_id": multi_task.user_id,
+            "status": multi_task.status.value,
+            "structured_result_ids": sr_ids,
+            "created_at": multi_task.created_at.isoformat()
+        }
+    }
+
+# GET /api/v1/users/multi-tasks - 获取指定用户的MultiTask列表
+@users_router.get("/multi-tasks")
+async def get_user_multi_tasks(
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取当前用户的多任务列表"""
+    # 验证token
+    token = credentials.credentials
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
+    
+    # 验证用户存在
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 查询多任务，分页返回id
+    multi_tasks = db.query(MultiTask.id).filter(MultiTask.user_id == user_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(MultiTask).filter(MultiTask.user_id == user_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [task[0] for task in multi_tasks]
+        }
+    }
+
+
+# 跨文档关系图路由
+
+# POST /api/v1/multi-relation-graphs - 对指定MultiTask进行跨文档分析
+@multi_relation_graph_router.post("")
+async def create_multi_relation_graph(
+    request: CreateMultiRelationGraphRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """对指定的MultiTask进行跨文档分析"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证MultiTask存在
+    multi_task = db.query(MultiTask).filter(MultiTask.id == request.multi_task_id).first()
+    if not multi_task:
+        raise HTTPException(status_code=404, detail="MultiTask不存在")
+    
+    # 调用分析函数（异步处理）
+    from analysis import analyze_multi_task
+    analyze_multi_task(request.multi_task_id, db)
+    
+    return {
+        "success": True,
+        "message": f"MultiTask {request.multi_task_id} 的跨文档分析已添加到处理队列"
+    }
+
+# GET /api/v1/multi-relation-graphs/{multi_relation_graph_id} - 获取指定MultiRelationGraph
+@multi_relation_graph_router.get("/{multi_relation_graph_id}")
+async def get_multi_relation_graph(
+    multi_relation_graph_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定id的跨文档关系图"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 查询跨文档关系图
+    multi_relation_graph = db.query(MultiRelationGraph).filter(MultiRelationGraph.id == multi_relation_graph_id).first()
+    
+    if not multi_relation_graph:
+        raise HTTPException(status_code=404, detail="MultiRelationGraph不存在")
+    
+    # 解析JSON内容
+    import json
+    try:
+        content = json.loads(multi_relation_graph.content)
+    except:
+        content = multi_relation_graph.content
+    
+    return {
+        "success": True,
+        "data": {
+            "id": multi_relation_graph.id,
+            "multi_task_id": multi_relation_graph.multi_task_id,
+            "content": content,
+            "status": multi_relation_graph.status.value,
+            "created_at": multi_relation_graph.created_at.isoformat()
+        }
+    }
+
+# GET /api/v1/multi-tasks/{multi_task_id}/multi-relation-graphs - 获取指定MultiTask的MultiRelationGraph列表
+@multi_task_router.get("/{multi_task_id}/multi-relation-graphs")
+async def get_multi_task_relation_graphs(
+    multi_task_id: int,
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定MultiTask的跨文档关系图列表"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # 验证MultiTask存在
+    multi_task = db.query(MultiTask).filter(MultiTask.id == multi_task_id).first()
+    if not multi_task:
+        raise HTTPException(status_code=404, detail="MultiTask不存在")
+    
+    # 查询跨文档关系图，分页返回id
+    relation_graphs = db.query(MultiRelationGraph.id).filter(MultiRelationGraph.multi_task_id == multi_task_id).offset(skip).limit(limit).all()
+    
+    # 获取总数
+    total = db.query(MultiRelationGraph).filter(MultiRelationGraph.multi_task_id == multi_task_id).count()
+    
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "ids": [graph[0] for graph in relation_graphs]
+        }
+    } 
 
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(images_router)
 app.include_router(ocr_router)
+app.include_router(structured_result_router)
+app.include_router(relation_graph_router)
+app.include_router(multi_task_router)
+app.include_router(multi_relation_graph_router)
 
 if __name__ == "__main__":
     import uvicorn
