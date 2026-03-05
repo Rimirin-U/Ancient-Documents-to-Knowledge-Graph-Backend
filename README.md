@@ -22,6 +22,14 @@ uvicorn main:app -reload
 
 ## API测试
 
+依赖：
+
 ```bash
-python api_test/test_api.py
+pip install pytest
+```
+
+运行：
+
+```bash
+pytest api_test/test_api.py -v -s
 ```

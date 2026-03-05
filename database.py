@@ -4,7 +4,7 @@
 import os
 from enum import Enum
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, mapped_column, Mapped
 
 # 数据库路径
@@ -73,6 +73,85 @@ class OcrResult(Base):
     
     # 关系
     image = relationship("Image", back_populates="ocr_results")
+    structured_results = relationship("StructuredResult", back_populates="ocr_result")
+
+
+class StructuredResult(Base):
+    """结构化结果表"""
+    __tablename__ = "structured_result"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    ocr_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("ocr_result.id"), index=True)
+    content: Mapped[str] = mapped_column(String)  # JSON格式
+    status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    
+    # 关系
+    ocr_result = relationship("OcrResult", back_populates="structured_results")
+    relation_graphs = relationship("RelationGraph", back_populates="structured_result")
+    multi_task_associations = relationship("MultiTaskStructuredResult", back_populates="structured_result")
+
+
+class RelationGraph(Base):
+    """关系图表"""
+    __tablename__ = "relation_graph"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    structured_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("structured_result.id"), index=True)
+    content: Mapped[str] = mapped_column(String)  # JSON格式
+    status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    
+    # 关系
+    structured_result = relationship("StructuredResult", back_populates="relation_graphs")
+
+
+class MultiTask(Base):
+    """跨文档分析任务表"""
+    __tablename__ = "multi_task"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), index=True)
+    status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    
+    # 关系
+    user = relationship("User")
+    multi_relation_graphs = relationship("MultiRelationGraph", back_populates="multi_task")
+    structured_result_associations = relationship("MultiTaskStructuredResult", back_populates="multi_task")
+
+
+class MultiRelationGraph(Base):
+    """跨文档关系图表"""
+    __tablename__ = "multi_relation_graph"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    multi_task_id: Mapped[int] = mapped_column(Integer, ForeignKey("multi_task.id"), index=True)
+    content: Mapped[str] = mapped_column(String)  # JSON格式
+    status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    
+    # 关系
+    multi_task = relationship("MultiTask", back_populates="multi_relation_graphs")
+
+
+class MultiTaskStructuredResult(Base):
+    """多任务与结构化结果关系表"""
+    __tablename__ = "multi_task_structured_result"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    multi_task_id: Mapped[int] = mapped_column(Integer, ForeignKey("multi_task.id"), index=True)
+    structured_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("structured_result.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    
+    # 关系
+    multi_task = relationship("MultiTask", back_populates="structured_result_associations")
+    structured_result = relationship("StructuredResult", back_populates="multi_task_associations")
+    
+    __table_args__ = (
+        # 联合唯一约束
+        UniqueConstraint("multi_task_id", "structured_result_id"),
+    )
 
 
 def init_db():
