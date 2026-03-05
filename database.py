@@ -4,7 +4,7 @@
 import os
 from enum import Enum
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, mapped_column, Mapped
 
 # 数据库路径
@@ -59,6 +59,7 @@ class Image(Base):
     # 关系
     user = relationship("User", back_populates="images")
     ocr_results = relationship("OcrResult", back_populates="image")
+    document = relationship("Document", back_populates="image", uselist=False)
 
 
 class OcrResult(Base):
@@ -73,6 +74,64 @@ class OcrResult(Base):
     
     # 关系
     image = relationship("Image", back_populates="ocr_results")
+
+
+class Document(Base):
+    """
+    文档分析结果表
+    存储从OCR文本中提取的结构化信息
+    """
+    __tablename__ = "document"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    image_id: Mapped[int] = mapped_column(Integer, ForeignKey("image.id"), unique=True)
+    
+    # 解析内容
+    time_text: Mapped[str] = mapped_column(String, nullable=True)
+    time_ad: Mapped[int] = mapped_column(Integer, index=True, nullable=True) # 公元年份
+    location: Mapped[str] = mapped_column(Text, nullable=True)
+    price: Mapped[str] = mapped_column(String, nullable=True)
+    subject: Mapped[str] = mapped_column(Text, nullable=True)
+    translation: Mapped[str] = mapped_column(Text, nullable=True)
+    
+    # 关系
+    relations = relationship("Relation", back_populates="document", cascade="all, delete-orphan")
+    image = relationship("Image", back_populates="document")
+
+
+class Entity(Base):
+    """
+    实体表
+    存储从文档中提取的人、地点、组织等实体
+    """
+    __tablename__ = "entity"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String, index=True)
+    type: Mapped[str] = mapped_column(String) # person, organization, location, object, date
+    
+    # 用于实体消歧的元数据
+    first_seen_year: Mapped[int] = mapped_column(Integer, nullable=True)
+    last_seen_year: Mapped[int] = mapped_column(Integer, nullable=True)
+    
+    # 关系
+    relations = relationship("Relation", back_populates="entity", cascade="all, delete-orphan")
+
+
+class Relation(Base):
+    """
+    关系表
+    连接文档和实体，并定义角色
+    """
+    __tablename__ = "relation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    document_id: Mapped[int] = mapped_column(Integer, ForeignKey("document.id"))
+    entity_id: Mapped[int] = mapped_column(Integer, ForeignKey("entity.id"))
+    role: Mapped[str] = mapped_column(String) # Seller, Buyer, Middleman, Witness, Subject, etc.
+    
+    document = relationship("Document", back_populates="relations")
+    entity = relationship("Entity", back_populates="relations")
 
 
 def init_db():

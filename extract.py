@@ -3,6 +3,8 @@ from dashscope import Generation
 import json
 import re
 import os
+from sqlalchemy.orm import Session
+from database import Document, Entity, Relation, Image
 
 # === 从环境变量获取API Key===
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "sk-293d49ac3daf4fd58b643b1542a4c89f")
@@ -161,3 +163,70 @@ def process_contract_by_id(id: str, model="qwen-turbo") -> bool:
     except Exception as e:
         print(f"[处理失败][ID={id}] {e}")
         return False
+
+def save_extraction_to_db(image_id: int, extraction_result: dict, db: Session):
+    """
+    Save extracted entities and relations to the database.
+    """
+    # Check if document already exists
+    existing_doc = db.query(Document).filter(Document.image_id == image_id).first()
+    if existing_doc:
+        # Delete existing document and its cascade relations
+        db.delete(existing_doc)
+        db.commit()
+    
+    # Create Document
+    time_text = None
+    subject = None
+    
+    entities_data = extraction_result.get("entities", [])
+    
+    # Try to extract common fields from entities
+    for ent in entities_data:
+        if ent.get("type") == "date":
+            time_text = ent.get("value")
+        if ent.get("role") == "标的":
+            subject = ent.get("value")
+
+    doc = Document(
+        image_id=image_id,
+        time_text=time_text,
+        subject=subject
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    
+    # Map (name, type) -> Entity object to reuse entities
+    # Ideally we should do global resolution, but for now let's just create/find
+    
+    entity_map = {}
+    
+    for ent_data in entities_data:
+        name = ent_data.get("value")
+        type_ = ent_data.get("type")
+        role = ent_data.get("role")
+        
+        if not name: continue
+        
+        # Check if entity exists in DB (Global resolution by name & type)
+        entity = db.query(Entity).filter(Entity.name == name, Entity.type == type_).first()
+        if not entity:
+            entity = Entity(name=name, type=type_)
+            db.add(entity)
+            db.commit()
+            db.refresh(entity)
+        
+        entity_map[name] = entity
+        
+        # Link Entity to Document via Relation (Role in Document)
+        if role:
+            rel = Relation(
+                document_id=doc.id,
+                entity_id=entity.id,
+                role=role
+            )
+            db.add(rel)
+    
+    db.commit()
+    return doc

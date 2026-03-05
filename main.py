@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from database import init_db, get_db, Image, User, OcrResult
+from database import init_db, get_db, Image, User, OcrResult, Document
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -15,6 +15,8 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from ocr import ocr_image_by_id
+from extract import extract_entities_relations_with_qwen, save_extraction_to_db
+from analysis import SocialNetworkAnalyzer
 
 # JWT 配置
 SECRET_KEY = "temp"
@@ -108,6 +110,9 @@ images_router = APIRouter(prefix="/api/v1/images", tags=["图片管理"])
 
 # OCR路由
 ocr_router = APIRouter(prefix="/api/v1/ocr-results", tags=["OCR结果"])
+
+# 分析路由
+analysis_router = APIRouter(prefix="/api/v1/analysis", tags=["知识抽取与分析"])
 
 
 # 认证路由
@@ -502,12 +507,108 @@ async def get_image_ocr_results(
     }
 
 
+# 分析接口
+
+@analysis_router.post("/{image_id}/extract")
+async def extract_knowledge(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    对指定的图片（需已有OCR结果）执行知识抽取并存入图谱数据库
+    """
+    verify_token(credentials.credentials)
+    
+    # 1. 获取最新的OCR结果
+    ocr_result = db.query(OcrResult).filter(OcrResult.image_id == image_id).order_by(OcrResult.created_at.desc()).first()
+    if not ocr_result or not ocr_result.raw_text:
+        raise HTTPException(status_code=400, detail="该图片尚无OCR结果，请先执行OCR")
+    
+    # 2. 调用 LLM 抽取
+    extraction = extract_entities_relations_with_qwen(ocr_result.raw_text)
+    
+    # 3. 存入数据库
+    doc = save_extraction_to_db(image_id, extraction, db)
+    
+    return {
+        "success": True,
+        "document_id": doc.id,
+        "extraction": extraction
+    }
+
+@analysis_router.get("/graph")
+async def get_social_graph(
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    获取全库的社会关系网络图谱（ECharts格式）
+    """
+    verify_token(credentials.credentials)
+    
+    analyzer = SocialNetworkAnalyzer(db)
+    analyzer.build_graph()
+    power_structure = analyzer.analyze_power_structure()
+    echarts_data = analyzer.export_echarts_json(power_structure)
+    
+    return {
+        "success": True,
+        "data": echarts_data
+    }
+
+@analysis_router.get("/{image_id}")
+async def get_image_analysis(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    获取单张图片的分析结果（节点和边）
+    """
+    verify_token(credentials.credentials)
+    
+    doc = db.query(Document).filter(Document.image_id == image_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="该图片尚未执行知识抽取")
+        
+    nodes = []
+    links = []
+    
+    # 构建节点和边
+    for rel in doc.relations:
+        entity = rel.entity
+        nodes.append({
+            "id": str(entity.id),
+            "name": entity.name,
+            "type": entity.type,
+            "category": rel.role
+        })
+        
+    # 这里的 links 可以是实体与文档的关系，或者实体间的关系
+    # 为了简化，返回实体在当前文档中的角色连接
+    
+    return {
+        "success": True,
+        "data": {
+            "document": {
+                "id": doc.id,
+                "time": doc.time_text,
+                "subject": doc.subject
+            },
+            "nodes": nodes,
+            "links": links
+        }
+    }
+
+
 # 路由注册 
 
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(images_router)
 app.include_router(ocr_router)
+app.include_router(analysis_router)
 
 if __name__ == "__main__":
     import uvicorn
