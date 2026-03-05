@@ -1,579 +1,446 @@
-"""
-API 测试脚本
-测试所有的 FastAPI 端点
-"""
-
+import pytest
 import requests
-import json
 import os
 import time
-from pathlib import Path
+from typing import Optional
 
-# API 基础地址
-BASE_URL = "http://localhost:8000"
+# API 基础 URL
+BASE_URL = "http://localhost:8000/api/v1"
 
 # 测试数据
-TEST_USERNAME = "testuser"
-TEST_PASSWORD = "testpassword123"
+TEST_USERNAME = "test_user"
+TEST_PASSWORD = "test_password123"
+TEST_IMAGE_PATH = "api_test/test_img/test_img.jpg"
 
-# 颜色输出
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    END = '\033[0m'
+# 全局变量存储测试数据
+access_token: Optional[str] = None
+user_id: Optional[int] = None
+image_id: Optional[int] = None
+ocr_result_id: Optional[int] = None
+structured_result_id: Optional[int] = None
+relation_graph_id: Optional[int] = None
+multi_task_id: Optional[int] = None
+multi_relation_graph_id: Optional[int] = None
 
-def print_test(message):
-    print(f"{Colors.BLUE}[测试] {message}{Colors.END}")
 
-def print_success(message):
-    print(f"{Colors.GREEN}[成功] {message}{Colors.END}")
-
-def print_error(message):
-    print(f"{Colors.RED}[失败] {message}{Colors.END}")
-
-def print_info(message):
-    print(f"{Colors.YELLOW}[信息] {message}{Colors.END}")
-
-# 全局变量存储 token 和 user_id
-access_token = None
-user_id = None
-
-def test_root():
-    """测试根端点"""
-    print_test("测试 GET /api")
-    try:
-        response = requests.get(f"{BASE_URL}/api")
-        if response.status_code == 200:
-            print_success(f"根端点: {response.text}")
-            return True
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_register():
-    """测试注册"""
-    global user_id
-    print_test("测试 POST /register")
-    try:
-        payload = {
-            "username": TEST_USERNAME,
-            "password": TEST_PASSWORD
-        }
-        response = requests.post(f"{BASE_URL}/register", json=payload)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                user_id = data.get("userId")
-                print_success(f"注册成功 - 用户ID: {user_id}, 用户名: {data.get('username')}")
-                return True
-            else:
-                # 用户可能已存在，这也是可以的
-                print_info(f"用户可能已存在: {data.get('message')}")
-                return True
-        else:
-            data = response.json()
-            print_info(f"用户可能已存在: {data.get('detail', '未知错误')}")
-            return True
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_login():
-    """测试登录"""
-    global access_token, user_id
-    print_test("测试 POST /login")
-    try:
-        payload = {
-            "username": TEST_USERNAME,
-            "password": TEST_PASSWORD
-        }
-        response = requests.post(f"{BASE_URL}/login", json=payload)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                access_token = data.get("access_token")
-                user_id = data.get("user_id")
-                print_success(f"登录成功 - 用户ID: {user_id}")
-                print_info(f"Token: {access_token[:20]}...")
-                return True
-            else:
-                print_error(f"登录失败: {data.get('detail')}")
-                return False
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_get_user_info():
-    """测试获取用户信息"""
-    print_test("测试 GET /user/info")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
+class TestAuthentication:
+    """认证相关测试"""
     
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.get(f"{BASE_URL}/user/info", headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                user_info = data.get("user", {})
-                print_success(f"获取用户信息成功")
-                print_info(f"用户ID: {user_info.get('id')}, 用户名: {user_info.get('username')}")
-                return True
-            else:
-                print_error(f"获取失败: {data.get('detail')}")
-                return False
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_upload():
-    """测试上传图片"""
-    print_test("测试 POST /api/upload")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
+    def test_01_register(self):
+        """测试用户注册"""
+        global user_id
+        response = requests.post(
+            f"{BASE_URL}/auth/register",
+            json={
+                "username": TEST_USERNAME,
+                "password": TEST_PASSWORD
+            }
+        )
+        assert response.status_code == 200, f"注册失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["username"] == TEST_USERNAME
+        user_id = data["userId"]
+        print(f"✓ 用户注册成功，用户ID: {user_id}")
     
-    test_file_path = str(Path(__file__).parent / "test_img" / "test_img.jpg")
-    try:
-        with open(test_file_path, "rb") as f:
-            files = {"image": ("test_img.jpg", f, "image/jpeg")}
-            headers = {
-                "Authorization": f"Bearer {access_token}"
+    def test_02_login(self):
+        """测试用户登录"""
+        global access_token, user_id
+        response = requests.post(
+            f"{BASE_URL}/auth/login",
+            json={
+                "username": TEST_USERNAME,
+                "password": TEST_PASSWORD
             }
-            data = {
-                "user_id": user_id or 1
+        )
+        assert response.status_code == 200, f"登录失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["token_type"] == "bearer"
+        access_token = data["access_token"]
+        user_id = data["user_id"]
+        print(f"✓ 用户登录成功，Token已获取")
+    
+    def test_03_get_user_info(self):
+        """测试获取用户信息"""
+        response = requests.get(
+            f"{BASE_URL}/users/me",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取用户信息失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["user"]["username"] == TEST_USERNAME
+        print(f"✓ 获取用户信息成功")
+    
+    def test_04_refresh_token(self):
+        """测试刷新 Token"""
+        global access_token
+        response = requests.post(
+            f"{BASE_URL}/auth/refresh",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"刷新Token失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        new_token = data["access_token"]
+        assert new_token != access_token
+        access_token = new_token
+        print(f"✓ Token刷新成功")
+    
+    def test_05_logout(self):
+        """测试退出登录"""
+        response = requests.post(
+            f"{BASE_URL}/auth/logout",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"退出登录失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 退出登录成功")
+
+
+class TestImages:
+    """图片管理相关测试"""
+    
+    def test_01_upload_image(self):
+        """测试上传图片"""
+        global image_id, access_token
+        
+        # 重新登录获取有效token
+        login_response = requests.post(
+            f"{BASE_URL}/auth/login",
+            json={
+                "username": TEST_USERNAME,
+                "password": TEST_PASSWORD
             }
-            
+        )
+        access_token = login_response.json()["access_token"]
+        
+        # 确保图片文件存在
+        if not os.path.exists(TEST_IMAGE_PATH):
+            pytest.skip(f"测试图片不存在: {TEST_IMAGE_PATH}")
+        
+        with open(TEST_IMAGE_PATH, "rb") as f:
+            files = {"image": f}
             response = requests.post(
-                f"{BASE_URL}/api/upload",
+                f"{BASE_URL}/images/upload",
                 files=files,
-                data=data,
-                headers=headers
+                params={"user_id": user_id},
+                headers={"Authorization": f"Bearer {access_token}"}
             )
         
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                image_id = result.get("imageId")
-                print_success(f"上传成功 - 图片ID: {image_id}")
-                print_info(f"文件名: {result.get('filename')}, 文件大小: {result.get('fileSize')} bytes")
-                return image_id
-            else:
-                print_error(f"上传失败: {result.get('message')}")
-                return None
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return None
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return None
+        assert response.status_code == 200, f"上传图片失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        image_id = data["imageId"]
+        print(f"✓ 图片上传成功，图片ID: {image_id}")
+    
+    def test_02_get_image(self):
+        """测试获取图片"""
+        response = requests.get(
+            f"{BASE_URL}/images/{image_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取图片失败: {response.text}"
+        assert len(response.content) > 0
+        print(f"✓ 图片获取成功")
+    
+    def test_03_get_user_images(self):
+        """测试获取用户图片列表"""
+        response = requests.get(
+            f"{BASE_URL}/users/images",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取用户图片列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["data"]["total"] > 0
+        assert image_id in data["data"]["ids"]
+        print(f"✓ 获取用户图片列表成功，共 {data['data']['total']} 张")
 
-def test_get_pic(image_id):
-    """测试获取图片"""
-    print_test(f"测试 GET /api/pic/{image_id}")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
-    
-    if not image_id:
-        print_error("未提供有效的图片ID")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.get(f"{BASE_URL}/api/pic/{image_id}", headers=headers)
-        
-        if response.status_code == 200:
-            print_success(f"获取图片成功 - 响应大小: {len(response.content)} bytes")
-            return True
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
 
-def test_get_analysis(image_id):
-    """测试获取分析结果"""
-    print_test(f"测试 GET /api/analysis/{image_id}")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
+class TestOCR:
+    """OCR 相关测试"""
     
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.get(f"{BASE_URL}/api/analysis/{image_id}", headers=headers)
+    def test_01_perform_ocr(self):
+        """测试执行 OCR"""
+        response = requests.post(
+            f"{BASE_URL}/images/{image_id}/ocr",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"执行OCR失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ OCR 任务已提交")
         
-        if response.status_code == 200:
-            data = response.json()
-            print_success(f"获取分析成功")
-            print_info(f"节点数: {len(data.get('nodes', []))}, 连接数: {len(data.get('links', []))}")
-            print_info(f"描述: {data.get('txt')}")
-            return True
+        # 等待 OCR 处理
+        time.sleep(2)
+    
+    def test_02_get_image_ocr_results(self):
+        """测试获取图片的 OCR 结果列表"""
+        response = requests.get(
+            f"{BASE_URL}/images/{image_id}/ocr-results",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取OCR结果列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        
+        if data["data"]["ids"]:
+            global ocr_result_id
+            ocr_result_id = data["data"]["ids"][0]
+            print(f"✓ 获取OCR结果列表成功，共 {data['data']['total']} 条")
         else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
+            print(f"⚠ 暂无OCR结果")
+    
+    def test_03_get_ocr_result(self):
+        """测试获取特定 OCR 结果"""
+        if not ocr_result_id:
+            pytest.skip("未找到OCR结果")
+        
+        response = requests.get(
+            f"{BASE_URL}/ocr-results/{ocr_result_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取OCR结果失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["data"]["image_id"] == image_id
+        print(f"✓ 获取OCR结果成功")
 
-def test_get_user_images(user_id_param):
-    """测试获取用户的图片列表"""
-    print_test(f"测试 GET /api/user-images (user_id={user_id_param})")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
-    
-    if not user_id_param:
-        print_error("未提供有效的用户ID")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        params = {
-            "user_id": user_id_param,
-            "skip": 0,
-            "limit": 10
-        }
-        response = requests.get(f"{BASE_URL}/api/user-images", headers=headers, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                result_data = data.get("data", {})
-                total = result_data.get("total", 0)
-                ids = result_data.get("ids", [])
-                print_success(f"获取用户图片列表成功")
-                print_info(f"总数: {total}, 当前返回: {len(ids)} 个")
-                if ids:
-                    print_info(f"图片IDs: {ids}")
-                return True, ids if ids else []
-            else:
-                print_error(f"获取失败: {data.get('detail')}")
-                return False, []
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False, []
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False, []
 
-def test_get_ocr_results(image_id):
-    """测试获取图片的OCR结果列表"""
-    print_test(f"测试 GET /api/image-ocr-results/{image_id}")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
+class TestStructuredResults:
+    """结构化结果相关测试"""
     
-    if not image_id:
-        print_error("未提供有效的图片ID")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        params = {
-            "skip": 0,
-            "limit": 10
-        }
-        response = requests.get(f"{BASE_URL}/api/image-ocr-results/{image_id}", headers=headers, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                result_data = data.get("data", {})
-                total = result_data.get("total", 0)
-                ids = result_data.get("ids", [])
-                print_success(f"获取图片的OCR结果列表成功")
-                print_info(f"总数: {total}, 当前返回: {len(ids)} 个")
-                if ids:
-                    print_info(f"OCR结果IDs: {ids}")
-                return True, ids if ids else []
-            else:
-                print_error(f"获取失败: {data.get('detail')}")
-                return False, []
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False, []
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False, []
-
-def test_get_ocr_result(ocr_id):
-    """测试获取指定ID的OCR结果"""
-    print_test(f"测试 GET /api/ocr/{ocr_id}")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
-    
-    if not ocr_id:
-        print_error("未提供有效的OCR结果ID")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.get(f"{BASE_URL}/api/ocr/{ocr_id}", headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                ocr_data = data.get("data", {})
-                print_success(f"获取OCR结果成功")
-                print_info(f"OCR ID: {ocr_data.get('id')}, 图片ID: {ocr_data.get('image_id')}")
-                text_preview = ocr_data.get('raw_text', '')[:50]
-                print_info(f"识别文本预览: {text_preview}...")
-                return True
-            else:
-                print_error(f"获取失败: {data.get('detail')}")
-                return False
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_logout():
-    """测试退出登录"""
-    print_test("测试 POST /logout")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.post(f"{BASE_URL}/logout", headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                print_success(f"退出登录成功")
-                return True
-            else:
-                print_error(f"退出失败: {data.get('message')}")
-                return False
-        else:
-            print_error(f"状态码: {response.status_code}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_perform_image_ocr(image_id):
-    """测试执行图片OCR"""
-    print_test(f"测试 POST /api/image-ocr/{image_id}")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False
-    
-    if not image_id:
-        print_error("未提供有效的图片ID")
-        return False
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        response = requests.post(f"{BASE_URL}/api/image-ocr/{image_id}", headers=headers)
-        
-        if response.status_code == 200:
-            print_success(f"OCR 执行成功")
-            return True
-        else:
-            print_error(f"状态码: {response.status_code}")
-            print_error(f"响应: {response.text}")
-            return False
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False
-
-def test_wait_for_ocr_completion(image_id, timeout=60):
-    """等待OCR结果完成，每2秒检查一次"""
-    print_test(f"等待OCR结果完成 (image_id={image_id})")
-    if not access_token:
-        print_error("未获取到有效的token")
-        return False, None
-    
-    if not image_id:
-        print_error("未提供有效的图片ID")
-        return False, None
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        
-        # 首先获取OCR结果列表
-        start_time = time.time()
-        ocr_result_id = None
-        
-        # 循环等待直到找到OCR结果或超时
-        while time.time() - start_time < timeout:
-            try:
-                params = {
-                    "skip": 0,
-                    "limit": 10
-                }
-                response = requests.get(
-                    f"{BASE_URL}/api/image-ocr-results/{image_id}",
-                    headers=headers,
-                    params=params
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success"):
-                        result_data = data.get("data", {})
-                        ids = result_data.get("ids", [])
-                        if ids:
-                            ocr_result_id = ids[0]
-                            print_success(f"找到OCR结果 ID: {ocr_result_id}")
-                            break
-            except Exception as e:
-                print_info(f"获取OCR结果列表失败: {str(e)}")
-            
-            time.sleep(2)
+    def test_01_create_structured_result(self):
+        """测试创建结构化结果"""
+        global structured_result_id
         
         if not ocr_result_id:
-            print_error(f"在{timeout}秒内未找到OCR结果")
-            return False, None
+            pytest.skip("未找到OCR结果")
         
-        # 现在轮询检查OCR结果状态，直到完成或失败
-        print_info("开始轮询OCR结果状态...")
-        poll_start_time = time.time()
+        response = requests.post(
+            f"{BASE_URL}/structured-results",
+            json={"ocr_result_id": ocr_result_id},
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"创建结构化结果失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 结构化分析任务已提交")
         
-        while time.time() - poll_start_time < timeout:
-            try:
-                response = requests.get(
-                    f"{BASE_URL}/api/ocr/{ocr_result_id}",
-                    headers=headers
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success"):
-                        ocr_data = data.get("data", {})
-                        status = ocr_data.get("status")
-                        
-                        print_info(f"OCR 状态: {status}")
-                        
-                        if status == "done":
-                            text_preview = ocr_data.get('raw_text', '')[:100]
-                            print_success(f"OCR 完成! 识别文本预览: {text_preview}...")
-                            return True, ocr_result_id
-                        elif status == "failed":
-                            print_error(f"OCR 失败")
-                            return False, ocr_result_id
-                        # 其他状态(pending, processing)继续轮询
-            except Exception as e:
-                print_info(f"获取OCR结果详情失败: {str(e)}")
-            
-            time.sleep(2)
-        
-        print_error(f"轮询超时，OCR未完成")
-        return False, ocr_result_id
-        
-    except Exception as e:
-        print_error(f"请求失败: {str(e)}")
-        return False, None
-
-def main():
-    """运行所有测试"""
-    print(f"\n{Colors.BLUE}{'='*60}")
-    print("FastAPI 应用程序测试脚本")
-    print(f"{'='*60}{Colors.END}\n")
+        # 等待分析处理
+        time.sleep(2)
     
-    print_info(f"API 基础地址: {BASE_URL}")
-    print_info(f"测试用户: {TEST_USERNAME}\n")
-    
-    results = {
-        "根端点": test_root(),
-        "注册": test_register(),
-        "登录": test_login(),
-        "获取用户信息": test_get_user_info(),
-    }
-    
-    # 上传图片并获取ID
-    image_id = test_upload()
-    results["上传图片"] = image_id is not None
-    
-    # 如果上传成功，测试获取图片和分析
-    if image_id:
-        results["获取图片"] = test_get_pic(image_id)
-        results["获取分析"] = test_get_analysis(image_id)
-        # 测试获取用户的图片列表
-        success, image_ids = test_get_user_images(user_id)
-        results["获取用户图片列表"] = success
+    def test_02_get_ocr_structured_results(self):
+        """测试获取 OCR 的结构化结果列表"""
+        response = requests.get(
+            f"{BASE_URL}/ocr-results/{ocr_result_id}/structured-results",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取结构化结果列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
         
-        if image_ids and len(image_ids) > 0:
-            # 使用获取到的第一个图片ID执行OCR
-            test_image_id = image_ids[0]
-            print_info(f"使用图片ID {test_image_id} 执行OCR测试")
-            
-            # 执行OCR
-            ocr_executed = test_perform_image_ocr(test_image_id)
-            results["执行OCR"] = ocr_executed
-            
-            if ocr_executed:
-                # 等待OCR完成
-                success, ocr_result_id = test_wait_for_ocr_completion(test_image_id)
-                results["等待OCR完成"] = success
-            else:
-                results["等待OCR完成"] = False
+        if data["data"]["ids"]:
+            global structured_result_id
+            structured_result_id = data["data"]["ids"][0]
+            print(f"✓ 获取结构化结果列表成功，共 {data['data']['total']} 条")
         else:
-            print_error("未获取到用户的图片列表，无法执行OCR测试")
-            results["执行OCR"] = False
-            results["等待OCR完成"] = False
-    else:
-        results["获取图片"] = False
-        results["获取分析"] = False
-        results["获取用户图片列表"] = False
-        results["执行OCR"] = False
-        results["等待OCR完成"] = False
+            print(f"⚠ 暂无结构化结果")
     
-    results["退出登录"] = test_logout()
+    def test_03_get_structured_result(self):
+        """测试获取特定结构化结果"""
+        if not structured_result_id:
+            pytest.skip("未找到结构化结果")
+        
+        response = requests.get(
+            f"{BASE_URL}/structured-results/{structured_result_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取结构化结果失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 获取结构化结果成功")
+
+
+class TestRelationGraphs:
+    """关系图相关测试"""
     
-    # 打印测试总结
-    print(f"\n{Colors.BLUE}{'='*60}")
-    print("测试总结")
-    print(f"{'='*60}{Colors.END}")
+    def test_01_create_relation_graph(self):
+        """测试创建关系图"""
+        global relation_graph_id
+        
+        if not structured_result_id:
+            pytest.skip("未找到结构化结果")
+        
+        response = requests.post(
+            f"{BASE_URL}/relation-graphs",
+            json={"structured_result_id": structured_result_id},
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"创建关系图失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 关系图分析任务已提交")
+        
+        # 等待分析处理
+        time.sleep(2)
     
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
+    def test_02_get_structured_result_relation_graphs(self):
+        """测试获取结构化结果的关系图列表"""
+        response = requests.get(
+            f"{BASE_URL}/structured-results/{structured_result_id}/relation-graphs",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取关系图列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        
+        if data["data"]["ids"]:
+            global relation_graph_id
+            relation_graph_id = data["data"]["ids"][0]
+            print(f"✓ 获取关系图列表成功，共 {data['data']['total']} 条")
+        else:
+            print(f"⚠ 暂无关系图")
     
-    for test_name, result in results.items():
-        status = f"{Colors.GREEN}✓ 通过{Colors.END}" if result else f"{Colors.RED}✗ 失败{Colors.END}"
-        print(f"{test_name}: {status}")
+    def test_03_get_relation_graph(self):
+        """测试获取特定关系图"""
+        if not relation_graph_id:
+            pytest.skip("未找到关系图")
+        
+        response = requests.get(
+            f"{BASE_URL}/relation-graphs/{relation_graph_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取关系图失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 获取关系图成功")
+
+
+class TestMultiTasks:
+    """多任务相关测试"""
     
-    print(f"\n总体: {Colors.GREEN if passed == total else Colors.YELLOW}{passed}/{total} 个测试通过{Colors.END}\n")
+    def test_01_create_multi_task(self):
+        """测试创建多任务"""
+        global multi_task_id
+        
+        if not structured_result_id:
+            pytest.skip("未找到结构化结果")
+        
+        response = requests.post(
+            f"{BASE_URL}/multi-tasks",
+            json={"structured_result_ids": [structured_result_id]},
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"创建多任务失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        multi_task_id = data["multi_task_id"]
+        print(f"✓ 多任务创建成功，任务ID: {multi_task_id}")
+    
+    def test_02_get_multi_task(self):
+        """测试获取多任务"""
+        response = requests.get(
+            f"{BASE_URL}/multi-tasks/{multi_task_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取多任务失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["data"]["id"] == multi_task_id
+        print(f"✓ 获取多任务成功")
+    
+    def test_03_get_user_multi_tasks(self):
+        """测试获取用户的多任务列表"""
+        response = requests.get(
+            f"{BASE_URL}/users/multi-tasks",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取用户多任务列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["data"]["total"] > 0
+        assert multi_task_id in data["data"]["ids"]
+        print(f"✓ 获取用户多任务列表成功，共 {data['data']['total']} 个")
+
+
+class TestMultiRelationGraphs:
+    """跨文档关系图相关测试"""
+    
+    def test_01_create_multi_relation_graph(self):
+        """测试创建跨文档关系图"""
+        global multi_relation_graph_id
+        
+        if not multi_task_id:
+            pytest.skip("未找到多任务")
+        
+        response = requests.post(
+            f"{BASE_URL}/multi-relation-graphs",
+            json={"multi_task_id": multi_task_id},
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"创建跨文档关系图失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 跨文档分析任务已提交")
+        
+        # 等待分析处理
+        time.sleep(2)
+    
+    def test_02_get_multi_task_relation_graphs(self):
+        """测试获取多任务的跨文档关系图列表"""
+        response = requests.get(
+            f"{BASE_URL}/multi-tasks/{multi_task_id}/multi-relation-graphs",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取跨文档关系图列表失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        
+        if data["data"]["ids"]:
+            global multi_relation_graph_id
+            multi_relation_graph_id = data["data"]["ids"][0]
+            print(f"✓ 获取跨文档关系图列表成功，共 {data['data']['total']} 条")
+        else:
+            print(f"⚠ 暂无跨文档关系图")
+    
+    def test_03_get_multi_relation_graph(self):
+        """测试获取特定跨文档关系图"""
+        if not multi_relation_graph_id:
+            pytest.skip("未找到跨文档关系图")
+        
+        response = requests.get(
+            f"{BASE_URL}/multi-relation-graphs/{multi_relation_graph_id}",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"获取跨文档关系图失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        print(f"✓ 获取跨文档关系图成功")
+
+
+class TestUserUpdate:
+    """用户信息更新测试"""
+    
+    def test_update_user_info(self):
+        """测试更新用户信息"""
+        new_username = f"{TEST_USERNAME}_updated"
+        response = requests.put(
+            f"{BASE_URL}/users/me",
+            json={"username": new_username},
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200, f"更新用户信息失败: {response.text}"
+        data = response.json()
+        assert data["success"] == True
+        assert data["user"]["username"] == new_username
+        print(f"✓ 用户信息更新成功")
+
 
 if __name__ == "__main__":
-    main()
+    # 运行测试：pytest test_api.py -v -s
+    print("请确保 API 服务已启动在 http://localhost:3000")
+    print("运行测试: pytest test_api.py -v -s")
