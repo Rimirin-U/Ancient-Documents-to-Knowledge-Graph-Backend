@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古代地契智能解析系统</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #8b4513; /* Brown for antique feel */
+            padding-bottom: 10px;
+        }
+        .layout {
+            display: flex;
+            gap: 20px;
+        }
+        .input-section {
+            flex: 1;
+        }
+        .output-section {
+            flex: 1;
+            background-color: #fafafa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-y: auto;
+            max-height: 800px;
+        }
+        textarea {
+            width: 100%;
+            height: 300px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+            resize: vertical;
+            margin-bottom: 10px;
+        }
+        .actions {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #8b4513;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #a0522d;
+        }
+        button.secondary {
+            background-color: #6c757d;
+        }
+        button.secondary:hover {
+            background-color: #5a6268;
+        }
+        .result-block {
+            margin-bottom: 20px;
+            border-bottom: 1px dashed #ccc;
+            padding-bottom: 10px;
+        }
+        .result-block h3 {
+            color: #555;
+            margin-top: 0;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .entity-tag {
+            display: inline-block;
+            background-color: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        .label {
+            font-weight: bold;
+            color: #444;
+        }
+        .error {
+            color: red;
+            background-color: #ffe6e6;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📜 古代地契智能解析系统</h1>
+    
+    <div class="layout">
+        <div class="input-section">
+            <h3>请输入地契原文：</h3>
+            <textarea id="inputText" placeholder="在此粘贴地契文本...例如：立杜绝卖契人张三..."></textarea>
+            
+            <div class="actions">
+                <button onclick="parseDeed()">🔍 智能解析</button>
+                <button class="secondary" onclick="translateDeed()">📖 白话翻译</button>
+                <button class="secondary" onclick="checkCorrection()">🛠️ 逻辑纠错</button>
+                <button class="secondary" onclick="loadExample()">📄 加载示例</button>
+            </div>
+            
+            <div id="loading" class="loading">正在处理中，请稍候...</div>
+        </div>
+        
+        <div class="output-section" id="outputArea">
+            <div style="text-align: center; color: #999; margin-top: 100px;">
+                解析结果将显示在这里
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = '/api/v1';
+
+    function showLoading() {
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('outputArea').innerHTML = '';
+    }
+
+    function hideLoading() {
+        document.getElementById('loading').style.display = 'none';
+    }
+
+    function loadExample() {
+        const example = "立杜绝卖契人张三，今因正用不足，情愿将自己祖遗坐落土名南乡一都二图，地名大树下，田三亩六分，东至李四田，西至沟，南至路，北至王五山，四至分明。凭中立契，出卖与赵六名为业。三面言定，时值价纹银五十两整。其银笔下交足，并无短少。其田自卖之后，任凭赵六管业，张三日后子孙不得言赎，亦不得言找。恐口无凭，立此杜绝卖契为照。嘉庆五年三月十二日。凭中人李四、王五。代书人陈七。";
+        document.getElementById('inputText').value = example;
+    }
+
+    async function parseDeed() {
+        const text = document.getElementById('inputText').value;
+        if (!text) return alert('请输入文本');
+        
+        showLoading();
+        
+        try {
+            const response = await fetch(`${API_BASE}/parse`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                renderParseResult(data);
+            } else {
+                renderError(data.detail || '解析失败');
+            }
+        } catch (e) {
+            renderError(e.message);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    async function translateDeed() {
+        const text = document.getElementById('inputText').value;
+        if (!text) return alert('请输入文本');
+        
+        showLoading();
+        
+        try {
+            const response = await fetch(`${API_BASE}/translate`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                renderTranslation(data.translation);
+            } else {
+                renderError(data.detail || '翻译失败');
+            }
+        } catch (e) {
+            renderError(e.message);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    async function checkCorrection() {
+        const text = document.getElementById('inputText').value;
+        if (!text) return alert('请输入文本');
+        
+        showLoading();
+        
+        try {
+            const response = await fetch(`${API_BASE}/correct`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                renderCorrection(data);
+            } else {
+                renderError(data.detail || '检查失败');
+            }
+        } catch (e) {
+            renderError(e.message);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function renderParseResult(data) {
+        const entities = data.parsed_data.extracted_entities;
+        const relationships = data.parsed_data.relationships;
+        const scores = data.parsed_data.confidence_scores;
+        
+        let html = `<div class="result-block"><h3>📊 解析结果 (置信度: ${scores.overall})</h3>`;
+        
+        // Basic Info
+        html += `<p><span class="label">📅 立契时间:</span> ${entities.date?.text || '-'} <small>(${entities.date?.normalized_value || ''})</small></p>`;
+        html += `<p><span class="label">💰 交易价格:</span> ${entities.price?.text || '-'} <small>(${entities.price?.normalized_value || ''})</small></p>`;
+        
+        // People
+        html += `<p><span class="label">📤 卖方:</span> ${entities.sellers.map(s => `<span class="entity-tag">${s.text}</span>`).join('')}</p>`;
+        html += `<p><span class="label">📥 买方:</span> ${entities.buyers.map(b => `<span class="entity-tag">${b.text}</span>`).join('')}</p>`;
+        html += `<p><span class="label">👀 见证人:</span> ${entities.witnesses.map(w => `<span class="entity-tag">${w.text}</span>`).join('')}</p>`;
+        
+        // Property
+        html += `<p><span class="label">🏠 标的物:</span> ${entities.subject?.text || '-'}</p>`;
+        html += `<p><span class="label">🧭 四至:</span> ${entities.boundaries?.text || '-'}</p>`;
+        
+        // Special Terms
+        if (entities.special_terms && entities.special_terms.length > 0) {
+            html += `<p><span class="label">⚠️ 特殊条款:</span></p><ul>`;
+            entities.special_terms.forEach(term => {
+                html += `<li>${term.text}</li>`;
+            });
+            html += `</ul>`;
+        }
+
+        // Relationships
+        if (relationships && relationships.length > 0) {
+             html += `<p><span class="label">🔗 实体关系:</span></p><ul>`;
+             relationships.forEach(rel => {
+                 let typeMap = {
+                     'sells_to': '出售给',
+                     'mortgages_to': '典当给',
+                     'witnessed_for': '见证',
+                     'surrenders_tenancy_to': '退耕给'
+                 };
+                 html += `<li>${rel.source} <b>${typeMap[rel.type] || rel.type}</b> ${rel.target}</li>`;
+             });
+             html += `</ul>`;
+        }
+        
+        html += `</div>`;
+        
+        // Raw JSON view
+        html += `<div class="result-block"><h3>📝 原始 JSON</h3><pre>${JSON.stringify(data.parsed_data, null, 2)}</pre></div>`;
+        
+        document.getElementById('outputArea').innerHTML = html;
+    }
+
+    function renderTranslation(translation) {
+        let html = `<div class="result-block"><h3>📖 白话文翻译</h3><pre>${translation}</pre></div>`;
+        document.getElementById('outputArea').innerHTML = html;
+    }
+
+    function renderCorrection(data) {
+        let html = `<div class="result-block"><h3>🛠️ 纠错报告</h3>`;
+        
+        if (data.semantic_conflicts && data.semantic_conflicts.length > 0) {
+            html += `<div class="error"><h4>发现逻辑冲突:</h4><ul>`;
+            data.semantic_conflicts.forEach(c => html += `<li>${c}</li>`);
+            html += `</ul></div>`;
+            
+            if (data.suggested_fix_prompt) {
+                html += `<h4>💡 建议修正提示:</h4><pre>${data.suggested_fix_prompt}</pre>`;
+            }
+        } else {
+            html += `<p style="color: green;">✅ 未发现明显的逻辑冲突或 OCR 错误。</p>`;
+        }
+        
+        html += `</div>`;
+        document.getElementById('outputArea').innerHTML = html;
+    }
+
+    function renderError(msg) {
+        document.getElementById('outputArea').innerHTML = `<div class="error">❌ 错误: ${msg}</div>`;
+    }
+</script>
+
+</body>
+</html>
