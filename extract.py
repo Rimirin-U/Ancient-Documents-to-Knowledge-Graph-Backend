@@ -5,6 +5,9 @@ import re
 import os
 from sqlalchemy.orm import Session
 from database import Document, Entity, Relation, Image
+from app.core.normalizer import normalize_date
+from app.core.translator import translate_text
+import asyncio
 
 # === 从环境变量获取API Key===
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "sk-293d49ac3daf4fd58b643b1542a4c89f")
@@ -164,9 +167,10 @@ def process_contract_by_id(id: str, model="qwen-turbo") -> bool:
         print(f"[处理失败][ID={id}] {e}")
         return False
 
-def save_extraction_to_db(image_id: int, extraction_result: dict, db: Session):
+async def save_extraction_to_db(image_id: int, extraction_result: dict, raw_text: str, db: Session):
     """
     Save extracted entities and relations to the database.
+    Includes normalization and translation.
     """
     # Check if document already exists
     existing_doc = db.query(Document).filter(Document.image_id == image_id).first()
@@ -175,7 +179,7 @@ def save_extraction_to_db(image_id: int, extraction_result: dict, db: Session):
         db.delete(existing_doc)
         db.commit()
     
-    # Create Document
+    # 1. Basic Extraction
     time_text = None
     subject = None
     
@@ -188,10 +192,31 @@ def save_extraction_to_db(image_id: int, extraction_result: dict, db: Session):
         if ent.get("role") == "标的":
             subject = ent.get("value")
 
+    # 2. Normalization
+    time_ad = None
+    if time_text:
+        _, norm_date, conf = normalize_date(time_text)
+        if conf > 0.5 and norm_date:
+            try:
+                time_ad = int(norm_date.split("-")[0])
+            except:
+                pass
+
+    # 3. Translation (Async)
+    # If raw_text is provided, we perform translation
+    translation = None
+    if raw_text:
+        try:
+            translation = await translate_text(raw_text)
+        except Exception as e:
+            print(f"Translation failed: {e}")
+
     doc = Document(
         image_id=image_id,
         time_text=time_text,
-        subject=subject
+        time_ad=time_ad,
+        subject=subject,
+        translation=translation
     )
     db.add(doc)
     db.commit()
@@ -213,6 +238,11 @@ def save_extraction_to_db(image_id: int, extraction_result: dict, db: Session):
         entity = db.query(Entity).filter(Entity.name == name, Entity.type == type_).first()
         if not entity:
             entity = Entity(name=name, type=type_)
+            # Update entity metadata if it's a date
+            if type_ == "date" and time_ad:
+                entity.first_seen_year = time_ad
+                entity.last_seen_year = time_ad
+                
             db.add(entity)
             db.commit()
             db.refresh(entity)

@@ -529,12 +529,14 @@ async def extract_knowledge(
     extraction = extract_entities_relations_with_qwen(ocr_result.raw_text)
     
     # 3. 存入数据库
-    doc = save_extraction_to_db(image_id, extraction, db)
+    doc = await save_extraction_to_db(image_id, extraction, ocr_result.raw_text, db)
     
     return {
         "success": True,
         "document_id": doc.id,
-        "extraction": extraction
+        "extraction": extraction,
+        "translation": doc.translation,
+        "normalized_year": doc.time_ad
     }
 
 @analysis_router.get("/graph")

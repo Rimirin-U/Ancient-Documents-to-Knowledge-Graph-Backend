@@ -127,6 +127,8 @@ def test_extraction(image_id):
         if data.get("success"):
             print_success(f"知识抽取成功 (耗时 {duration:.2f}s)")
             print_info(f"抽取结果预览: {str(data.get('extraction'))[:200]}...")
+            print_info(f"翻译预览: {str(data.get('translation'))[:100]}...")
+            print_info(f"标准化年份: {data.get('normalized_year')}")
             return True
     
     print_error(f"知识抽取失败: {resp.text}")
