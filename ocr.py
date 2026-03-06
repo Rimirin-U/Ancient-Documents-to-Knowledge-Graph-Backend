@@ -8,8 +8,8 @@ from database import SessionLocal, Image, OcrResult, OcrStatus
 try:
     from paddleocr import PaddleOCRVL
     HAS_PADDLEOCR = True
-except ImportError:
-    print("Warning: PaddleOCRVL not found, using mock OCR.")
+except Exception as e:
+    print(f"Warning: PaddleOCRVL import failed ({e}), using mock OCR.")
     HAS_PADDLEOCR = False
 
 class MockPaddleOCRVL:

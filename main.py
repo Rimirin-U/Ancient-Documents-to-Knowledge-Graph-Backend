@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional
+from typing import Optional, List
 from database import (
     init_db, get_db, Image, User, OcrResult, 
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
@@ -37,6 +37,7 @@ app = FastAPI()
 class RegisterRequest(BaseModel):
     username: str
     password: str
+    email: Optional[str] = None
 
 class LoginRequest(BaseModel):
     username: str
@@ -50,6 +51,7 @@ class UserResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
+    email: Optional[str] = None
 
 class CreateStructuredResultRequest(BaseModel):
     ocr_result_id: int
@@ -58,7 +60,7 @@ class CreateRelationGraphRequest(BaseModel):
     structured_result_id: int
 
 class CreateMultiTaskRequest(BaseModel):
-    structured_result_ids: list[int]
+    structured_result_ids: List[int]
 
 class CreateMultiRelationGraphRequest(BaseModel):
     multi_task_id: int
@@ -152,6 +154,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     hashed_password = hash_password(request.password)
     db_user = User(
         username=request.username,
+        email=request.email,
         password_hash=hashed_password,
         created_at=datetime.now(timezone.utc)
     )
@@ -163,7 +166,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         "success": True,
         "message": "注册成功",
         "userId": db_user.id,
-        "username": db_user.username
+        "username": db_user.username,
+        "email": db_user.email
     }
 
 # POST /api/v1/auth/login - 登录
@@ -208,6 +212,7 @@ async def get_user_info(credentials: HTTPAuthorizationCredentials = Depends(secu
         "user": {
             "id": db_user.id,
             "username": db_user.username,
+            "email": db_user.email,
             "created_at": db_user.created_at.isoformat()
         }
     }
@@ -279,6 +284,9 @@ async def update_user_info(request: UpdateUserRequest, credentials: HTTPAuthoriz
     if request.password:
         db_user.password_hash = hash_password(request.password)
     
+    if request.email:
+        db_user.email = request.email
+    
     db.commit()
     db.refresh(db_user)
     
@@ -288,6 +296,7 @@ async def update_user_info(request: UpdateUserRequest, credentials: HTTPAuthoriz
         "user": {
             "id": db_user.id,
             "username": db_user.username,
+            "email": db_user.email,
             "created_at": db_user.created_at.isoformat()
         }
     }
