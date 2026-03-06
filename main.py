@@ -78,6 +78,9 @@ class CreateMultiTaskRequest(BaseModel):
 class CreateMultiRelationGraphRequest(BaseModel):
     multi_task_id: int
 
+class ChatQueryRequest(BaseModel):
+    question: str
+
 # 工具函数
 def hash_password(password: str) -> str:
     """加密密码"""
@@ -151,6 +154,9 @@ multi_task_router = APIRouter(prefix="/api/v1/multi-tasks", tags=["多任务分�
 
 # 跨文档关系图路由
 multi_relation_graph_router = APIRouter(prefix="/api/v1/multi-relation-graphs", tags=["跨文档关系图"])
+
+# 智能问答路由
+chat_router = APIRouter(prefix="/api/v1/chat", tags=["智能问答"])
 
 
 # 认证路由
@@ -978,6 +984,29 @@ async def get_multi_task_relation_graphs(
         }
     } 
 
+# 智能问答路由
+
+# POST /api/v1/chat/query - 智能问答
+@chat_router.post("/query")
+async def chat_query(
+    request: ChatQueryRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """基于知识库的智能问答"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    from rag import rag_pipeline
+    result = rag_pipeline(request.question, db)
+    
+    return {
+        "success": True,
+        "answer": result["answer"],
+        "sources": result["sources"]
+    }
+
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(images_router)
@@ -986,6 +1015,7 @@ app.include_router(structured_result_router)
 app.include_router(relation_graph_router)
 app.include_router(multi_task_router)
 app.include_router(multi_relation_graph_router)
+app.include_router(chat_router)
 
 if __name__ == "__main__":
     import uvicorn
