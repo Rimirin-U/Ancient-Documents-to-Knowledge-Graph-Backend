@@ -3,7 +3,9 @@ input/
 output/
 database/*.db
 upload/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 .env
 
