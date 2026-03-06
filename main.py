@@ -17,12 +17,25 @@ from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from dotenv import load_dotenv
+import warnings
 
 from ocr import ocr_image_by_id
 
+# 加载.env
+load_dotenv()
+
 # JWT 配置
-SECRET_KEY = "temp"
-ALGORITHM = "HS256"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    warnings.warn(
+        "未在环境变量中找到SECRET_KEY",
+        UserWarning,
+        stacklevel=2
+    )
+    SECRET_KEY = "temp"
+
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60 # 24h
 
 # 密码加密
@@ -82,13 +95,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, str(SECRET_KEY), algorithm=ALGORITHM)
     return encoded_jwt
 
 def verify_token(token: str) -> dict:
     """验证JWT token"""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, str(SECRET_KEY), algorithms=[ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token已过期")

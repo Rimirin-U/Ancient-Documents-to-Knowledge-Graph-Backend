@@ -3,6 +3,11 @@ input/
 output/
 database/*.db
 upload/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+.env
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
