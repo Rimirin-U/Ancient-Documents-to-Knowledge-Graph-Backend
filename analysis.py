@@ -268,6 +268,65 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
         db.commit()
 
 
+def calculate_similarity(node1_attrs, node2_attrs):
+    """
+    计算两个节点的相似度，用于实体消歧
+    
+    评分规则 (总分 1.0):
+    1. 姓名完全匹配: +0.4
+    2. 角色相同: +0.2
+    3. 出现时间相近 (比如相差5年内): +0.2
+    4. 地点相关 (相同或包含关系): +0.2
+    
+    阈值: > 0.7 判定为同一实体
+    """
+    score = 0.0
+    
+    # 1. 姓名匹配 (这是基础)
+    name1 = node1_attrs.get("name", "")
+    name2 = node2_attrs.get("name", "")
+    if not name1 or not name2:
+        return 0.0
+    
+    if name1 == name2:
+        score += 0.4
+    elif name1 in name2 or name2 in name1: # 部分匹配，如 "张三" 和 "张三丰"
+        score += 0.2
+    else:
+        # 姓名完全不相关，直接返回0，不予合并
+        return 0.0
+        
+    # 2. 角色匹配
+    role1 = node1_attrs.get("role", "")
+    role2 = node2_attrs.get("role", "")
+    if role1 == role2:
+        score += 0.2
+    
+    # 3. 时间匹配
+    time1 = node1_attrs.get("time_ad")
+    time2 = node2_attrs.get("time_ad")
+    
+    if time1 and time2:
+        try:
+            diff = abs(int(time1) - int(time2))
+            if diff <= 5: # 5年内
+                score += 0.2
+            elif diff <= 20: # 20年内，可能是同一人不同时期
+                score += 0.1
+        except:
+            pass # 解析失败忽略
+    
+    # 4. 地点匹配
+    loc1 = node1_attrs.get("location", "")
+    loc2 = node2_attrs.get("location", "")
+    if loc1 and loc2:
+        if loc1 == loc2:
+            score += 0.2
+        elif loc1 in loc2 or loc2 in loc1:
+            score += 0.15
+            
+    return score
+
 def analyze_multi_task(multi_task_id: int, db: Session) -> None:
     """
     对MultiTask进行跨文档分析
@@ -292,33 +351,124 @@ def analyze_multi_task(multi_task_id: int, db: Session) -> None:
         # 使用NetworkX构建合并图
         G = nx.Graph()
         
-        node_attributes = {} # 存储节点属性
+        # 1. 初始节点收集 (带属性)
+        raw_nodes = []
         
         for sr in structured_results:
             try:
                 data = json.loads(sr.content)
                 doc_id = str(sr.id)
+                time_ad = data.get("Time_AD")
+                location = data.get("Location")
                 
-                seller = data.get("Seller")
-                buyer = data.get("Buyer")
-                middleman = data.get("Middleman")
+                # 提取各角色
+                roles = ["Seller", "Buyer", "Middleman"]
+                for role in roles:
+                    name = data.get(role)
+                    if name and name not in ["未识别", "未知", ""]:
+                        raw_nodes.append({
+                            "original_name": name,
+                            "role": role,
+                            "doc_id": doc_id,
+                            "time_ad": time_ad,
+                            "location": location,
+                            "data": data # 保留原始数据引用
+                        })
+            except json.JSONDecodeError:
+                continue
                 
-                # 简单的实体消歧：假设同名即同人
-                # 实际项目中这里需要更复杂的实体对齐算法
+        # 2. 实体消歧与合并
+        # 这是一个简单的聚类过程
+        # merged_entities = { "实体ID": { "name": "...", "aliases": [], "docs": [...] } }
+        merged_entities = []
+        
+        for node in raw_nodes:
+            matched = False
+            best_score = 0
+            best_match_idx = -1
+            
+            # 尝试与已存在的实体合并
+            for idx, entity in enumerate(merged_entities):
+                # 取实体中已有的第一个记录作为代表进行比较
+                representative = entity["instances"][0]
                 
-                if seller and seller not in ["未识别", "未知"]:
-                    G.add_node(seller, category="Seller")
-                    node_attributes[seller] = {"role": "Seller", "docs": node_attributes.get(seller, {}).get("docs", []) + [doc_id]}
+                # 构造比较所需的属性字典
+                node_attrs = {
+                    "name": node["original_name"],
+                    "role": node["role"],
+                    "time_ad": node["time_ad"],
+                    "location": node["location"]
+                }
+                
+                rep_attrs = {
+                    "name": representative["original_name"],
+                    "role": representative["role"],
+                    "time_ad": representative["time_ad"],
+                    "location": representative["location"]
+                }
+                
+                score = calculate_similarity(node_attrs, rep_attrs)
+                
+                if score > 0.7 and score > best_score:
+                    best_score = score
+                    best_match_idx = idx
+                    matched = True
+            
+            if matched:
+                merged_entities[best_match_idx]["instances"].append(node)
+                # 更新标准名 (可选: 选择出现次数最多的名字)
+            else:
+                # 创建新实体
+                merged_entities.append({
+                    "id": f"entity_{len(merged_entities)}",
+                    "standard_name": node["original_name"],
+                    "role": node["role"], # 初始角色
+                    "instances": [node]
+                })
+
+        # 3. 构建图谱
+        node_attributes = {}
+        
+        # 添加节点
+        for entity in merged_entities:
+            node_id = entity["standard_name"] # 使用标准名作为ID，或者使用 entity["id"]
+            
+            # 收集该实体涉及的所有文档ID
+            related_docs = list(set([inst["doc_id"] for inst in entity["instances"]]))
+            
+            G.add_node(node_id, category=entity["role"])
+            node_attributes[node_id] = {
+                "role": entity["role"],
+                "docs": related_docs,
+                "instances_count": len(entity["instances"])
+            }
+            
+        # 添加边 (基于文档共现关系)
+        # 如果两个实体在同一个文档中出现，并且有交易关系，则连线
+        for sr in structured_results:
+            try:
+                data = json.loads(sr.content)
+                doc_id = str(sr.id)
+                
+                # 找到该文档中涉及的实体
+                doc_entities = {} # role -> entity_name
+                
+                for role in ["Seller", "Buyer", "Middleman"]:
+                    name = data.get(role)
+                    if not name: continue
                     
-                if buyer and buyer not in ["未识别", "未知"]:
-                    G.add_node(buyer, category="Buyer")
-                    node_attributes[buyer] = {"role": "Buyer", "docs": node_attributes.get(buyer, {}).get("docs", []) + [doc_id]}
-                    
-                if middleman and middleman not in ["未识别", "未知"]:
-                    G.add_node(middleman, category="Middleman")
-                    node_attributes[middleman] = {"role": "Middleman", "docs": node_attributes.get(middleman, {}).get("docs", []) + [doc_id]}
+                    # 查找该名字归属哪个合并后的实体
+                    for entity in merged_entities:
+                        for inst in entity["instances"]:
+                            if inst["doc_id"] == doc_id and inst["original_name"] == name:
+                                doc_entities[role] = entity["standard_name"]
+                                break
+                        if role in doc_entities: break
                 
-                # 添加边
+                seller = doc_entities.get("Seller")
+                buyer = doc_entities.get("Buyer")
+                middleman = doc_entities.get("Middleman")
+                
                 if seller and buyer:
                     G.add_edge(seller, buyer, relation="Trade", doc_id=doc_id)
                 if middleman and seller:
@@ -326,10 +476,10 @@ def analyze_multi_task(multi_task_id: int, db: Session) -> None:
                 if middleman and buyer:
                     G.add_edge(middleman, buyer, relation="Witness", doc_id=doc_id)
                     
-            except json.JSONDecodeError:
+            except Exception:
                 continue
 
-        # 转换为ECharts格式
+        # 4. 转换为ECharts格式
         nodes = []
         categories = [{"name": "Seller"}, {"name": "Buyer"}, {"name": "Middleman"}]
         category_map = {"Seller": 0, "Buyer": 1, "Middleman": 2}
@@ -366,7 +516,7 @@ def analyze_multi_task(multi_task_id: int, db: Session) -> None:
             })
             
         echarts_option = {
-            "title": {"text": "跨文档社会关系网络"},
+            "title": {"text": "跨文档社会关系网络 (实体消歧增强版)"},
             "tooltip": {},
             "legend": [{"data": ["Seller", "Buyer", "Middleman"]}],
             "series": [{
