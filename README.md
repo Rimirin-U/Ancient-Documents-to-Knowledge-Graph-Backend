@@ -8,6 +8,14 @@
 pip install -r requirements.txt
 ```
 
+## `.env`配置
+
+```
+DASHSCOPE_API_KEY
+SECRET_KEY
+ALGORITHM
+```
+
 ## 启动服务器
 
 ```bash
