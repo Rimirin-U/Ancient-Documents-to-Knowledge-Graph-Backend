@@ -41,7 +41,7 @@ class TestAuthentication:
         assert data["success"] == True
         assert data["username"] == TEST_USERNAME
         user_id = data["userId"]
-        print(f"✓ 用户注册成功，用户ID: {user_id}")
+        print(f"用户注册成功，用户ID: {user_id}")
     
     def test_02_login(self):
         """测试用户登录"""
@@ -59,7 +59,7 @@ class TestAuthentication:
         assert data["token_type"] == "bearer"
         access_token = data["access_token"]
         user_id = data["user_id"]
-        print(f"✓ 用户登录成功，Token已获取")
+        print(f"用户登录成功，Token已获取")
     
     def test_03_get_user_info(self):
         """测试获取用户信息"""
@@ -71,7 +71,7 @@ class TestAuthentication:
         data = response.json()
         assert data["success"] == True
         assert data["user"]["username"] == TEST_USERNAME
-        print(f"✓ 获取用户信息成功")
+        print(f"获取用户信息成功")
     
     def test_04_refresh_token(self):
         """测试刷新 Token"""
@@ -86,7 +86,7 @@ class TestAuthentication:
         new_token = data["access_token"]
         assert new_token != access_token
         access_token = new_token
-        print(f"✓ Token刷新成功")
+        print(f"Token刷新成功")
     
     def test_05_logout(self):
         """测试退出登录"""
@@ -97,7 +97,7 @@ class TestAuthentication:
         assert response.status_code == 200, f"退出登录失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 退出登录成功")
+        print(f"退出登录成功")
 
 
 class TestImages:
@@ -134,7 +134,7 @@ class TestImages:
         data = response.json()
         assert data["success"] == True
         image_id = data["imageId"]
-        print(f"✓ 图片上传成功，图片ID: {image_id}")
+        print(f"图片上传成功，图片ID: {image_id}")
     
     def test_02_get_image(self):
         """测试获取图片"""
@@ -144,7 +144,7 @@ class TestImages:
         )
         assert response.status_code == 200, f"获取图片失败: {response.text}"
         assert len(response.content) > 0
-        print(f"✓ 图片获取成功")
+        print(f"图片获取成功")
     
     def test_03_get_user_images(self):
         """测试获取用户图片列表"""
@@ -157,7 +157,7 @@ class TestImages:
         assert data["success"] == True
         assert data["data"]["total"] > 0
         assert image_id in data["data"]["ids"]
-        print(f"✓ 获取用户图片列表成功，共 {data['data']['total']} 张")
+        print(f"获取用户图片列表成功，共 {data['data']['total']} 张")
 
 
 class TestOCR:
@@ -172,7 +172,7 @@ class TestOCR:
         assert response.status_code == 200, f"执行OCR失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ OCR 任务已提交")
+        print(f"OCR 任务已提交")
         
         # 等待 OCR 处理
         time.sleep(2)
@@ -190,7 +190,7 @@ class TestOCR:
         if data["data"]["ids"]:
             global ocr_result_id
             ocr_result_id = data["data"]["ids"][0]
-            print(f"✓ 获取OCR结果列表成功，共 {data['data']['total']} 条")
+            print(f"获取OCR结果列表成功，共 {data['data']['total']} 条")
         else:
             print(f"⚠ 暂无OCR结果")
     
@@ -207,7 +207,7 @@ class TestOCR:
         data = response.json()
         assert data["success"] == True
         assert data["data"]["image_id"] == image_id
-        print(f"✓ 获取OCR结果成功")
+        print(f"获取OCR结果成功")
 
 
 class TestStructuredResults:
@@ -228,7 +228,7 @@ class TestStructuredResults:
         assert response.status_code == 200, f"创建结构化结果失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 结构化分析任务已提交")
+        print(f"结构化分析任务已提交")
         
         # 等待分析处理
         time.sleep(2)
@@ -246,7 +246,7 @@ class TestStructuredResults:
         if data["data"]["ids"]:
             global structured_result_id
             structured_result_id = data["data"]["ids"][0]
-            print(f"✓ 获取结构化结果列表成功，共 {data['data']['total']} 条")
+            print(f"获取结构化结果列表成功，共 {data['data']['total']} 条")
         else:
             print(f"⚠ 暂无结构化结果")
     
@@ -262,7 +262,7 @@ class TestStructuredResults:
         assert response.status_code == 200, f"获取结构化结果失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 获取结构化结果成功")
+        print(f"获取结构化结果成功")
 
 
 class TestRelationGraphs:
@@ -283,7 +283,7 @@ class TestRelationGraphs:
         assert response.status_code == 200, f"创建关系图失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 关系图分析任务已提交")
+        print(f"关系图分析任务已提交")
         
         # 等待分析处理
         time.sleep(2)
@@ -301,7 +301,7 @@ class TestRelationGraphs:
         if data["data"]["ids"]:
             global relation_graph_id
             relation_graph_id = data["data"]["ids"][0]
-            print(f"✓ 获取关系图列表成功，共 {data['data']['total']} 条")
+            print(f"获取关系图列表成功，共 {data['data']['total']} 条")
         else:
             print(f"⚠ 暂无关系图")
     
@@ -317,7 +317,7 @@ class TestRelationGraphs:
         assert response.status_code == 200, f"获取关系图失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 获取关系图成功")
+        print(f"获取关系图成功")
 
 
 class TestMultiTasks:
@@ -339,7 +339,7 @@ class TestMultiTasks:
         data = response.json()
         assert data["success"] == True
         multi_task_id = data["multi_task_id"]
-        print(f"✓ 多任务创建成功，任务ID: {multi_task_id}")
+        print(f"多任务创建成功，任务ID: {multi_task_id}")
     
     def test_02_get_multi_task(self):
         """测试获取多任务"""
@@ -351,7 +351,7 @@ class TestMultiTasks:
         data = response.json()
         assert data["success"] == True
         assert data["data"]["id"] == multi_task_id
-        print(f"✓ 获取多任务成功")
+        print(f"获取多任务成功")
     
     def test_03_get_user_multi_tasks(self):
         """测试获取用户的多任务列表"""
@@ -364,7 +364,7 @@ class TestMultiTasks:
         assert data["success"] == True
         assert data["data"]["total"] > 0
         assert multi_task_id in data["data"]["ids"]
-        print(f"✓ 获取用户多任务列表成功，共 {data['data']['total']} 个")
+        print(f"获取用户多任务列表成功，共 {data['data']['total']} 个")
 
 
 class TestMultiRelationGraphs:
@@ -385,7 +385,7 @@ class TestMultiRelationGraphs:
         assert response.status_code == 200, f"创建跨文档关系图失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 跨文档分析任务已提交")
+        print(f"跨文档分析任务已提交")
         
         # 等待分析处理
         time.sleep(2)
@@ -403,7 +403,7 @@ class TestMultiRelationGraphs:
         if data["data"]["ids"]:
             global multi_relation_graph_id
             multi_relation_graph_id = data["data"]["ids"][0]
-            print(f"✓ 获取跨文档关系图列表成功，共 {data['data']['total']} 条")
+            print(f"获取跨文档关系图列表成功，共 {data['data']['total']} 条")
         else:
             print(f"⚠ 暂无跨文档关系图")
     
@@ -419,7 +419,7 @@ class TestMultiRelationGraphs:
         assert response.status_code == 200, f"获取跨文档关系图失败: {response.text}"
         data = response.json()
         assert data["success"] == True
-        print(f"✓ 获取跨文档关系图成功")
+        print(f"获取跨文档关系图成功")
 
 
 class TestUserUpdate:
@@ -437,10 +437,10 @@ class TestUserUpdate:
         data = response.json()
         assert data["success"] == True
         assert data["user"]["username"] == new_username
-        print(f"✓ 用户信息更新成功")
+        print(f"用户信息更新成功")
 
 
 if __name__ == "__main__":
     # 运行测试：pytest test_api.py -v -s
-    print("请确保 API 服务已启动在 http://localhost:3000")
+    print("请确保 API 服务已启动在 http://localhost:8000")
     print("运行测试: pytest test_api.py -v -s")
