@@ -512,33 +512,40 @@ async def upload_image(
     
     # 读取文件数据并验证大小
     try:
+        # file_data = await image.read() # 这种方式对于大文件可能导致内存问题，且seek位置可能不对
+        # file_size = len(file_data)
+        
+        # 使用spooled file
+        await image.seek(0)
         file_data = await image.read()
         file_size = len(file_data)
         
         # 验证文件大小
         if file_size > MAX_FILE_SIZE:
-            return {
-                "success": False,
-                "message": f"文件过大。最大允许大小: 10MB, 当前大小: {file_size / 1024 / 1024:.2f}MB"
-            }
+            return JSONResponse(status_code=400, content={"success": False, "message": f"文件过大。最大允许大小: 10MB"})
         
         if file_size == 0:
-            return {
-                "success": False,
-                "message": "文件为空"
-            }
+            return JSONResponse(status_code=400, content={"success": False, "message": "文件为空"})
+            
     except Exception as e:
-        return {"success": False, "message": f"读取文件失败: {str(e)}"}
+        return JSONResponse(status_code=500, content={"success": False, "message": f"读取文件失败: {str(e)}"})
+    
     # 生成唯一文件名
     original_name = os.path.splitext(image.filename or "upload")[0]
     unique_filename = f"{original_name}_{uuid.uuid4().hex[:8]}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, unique_filename)
-    # 保存文件到磁盘
+    
+    # 确保目录存在 (绝对路径)
+    abs_upload_dir = os.path.abspath(UPLOAD_DIR)
+    if not os.path.exists(abs_upload_dir):
+        os.makedirs(abs_upload_dir)
+        
+    file_path = os.path.join(abs_upload_dir, unique_filename)
+    
     try:
         with open(file_path, "wb") as buffer:
             buffer.write(file_data)
     except Exception as e:
-        return {"success": False, "message": f"保存文件失败: {str(e)}"}
+        return JSONResponse(status_code=500, content={"success": False, "message": f"保存文件失败: {str(e)}"})
     
     # 保存图片信息到数据库
     try:
