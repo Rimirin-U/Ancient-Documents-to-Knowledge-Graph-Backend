@@ -201,18 +201,38 @@ async def adapter_upload(
     if ext not in ALLOWED_EXTENSIONS:
         return JSONResponse(status_code=400, content={"success": False, "message": "不支持的文件类型"})
     
+    # 读取文件数据并验证大小
     try:
+        # file_data = await image.read() # 这种方式对于大文件可能导致内存问题，且seek位置可能不对
+        # file_size = len(file_data)
+        
+        # 使用spooled file
+        await image.seek(0)
         file_data = await image.read()
-        original_name = os.path.splitext(image.filename or "upload")[0]
-        unique_filename = f"{original_name}_{uuid.uuid4().hex[:8]}{ext}"
+        file_size = len(file_data)
         
-        # 确保目录存在 (绝对路径)
-        abs_upload_dir = os.path.abspath(UPLOAD_DIR)
-        if not os.path.exists(abs_upload_dir):
-            os.makedirs(abs_upload_dir)
+        # 验证文件大小
+        if file_size > MAX_FILE_SIZE:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"文件过大。最大允许大小: 10MB"})
+        
+        if file_size == 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": "文件为空"})
             
-        file_path = os.path.join(abs_upload_dir, unique_filename)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": f"读取文件失败: {str(e)}"})
+    
+    # 生成唯一文件名
+    original_name = os.path.splitext(image.filename or "upload")[0]
+    unique_filename = f"{original_name}_{uuid.uuid4().hex[:8]}{ext}"
+    
+    # 确保目录存在 (绝对路径)
+    abs_upload_dir = os.path.abspath(UPLOAD_DIR)
+    if not os.path.exists(abs_upload_dir):
+        os.makedirs(abs_upload_dir)
         
+    file_path = os.path.join(abs_upload_dir, unique_filename)
+    
+    try:
         with open(file_path, "wb") as buffer:
             buffer.write(file_data)
             
@@ -243,9 +263,8 @@ async def adapter_upload(
             "analysisId": str(db_image.id), # 返回image_id作为analysisId
             "message": "上传成功，正在后台分析..."
         }
-        
     except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+        return JSONResponse(status_code=500, content={"success": False, "message": f"保存文件失败: {str(e)}"})
 
 @adapter_router.get("/api/analysis/{analysis_id}")
 async def adapter_get_analysis(analysis_id: int, db: Session = Depends(get_db)):
