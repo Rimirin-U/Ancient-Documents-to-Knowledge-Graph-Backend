@@ -65,7 +65,7 @@ GET /api
 }
 ```
 
-**失败响应** (400/409)
+**失败响应** (400)
 ```json
 {
   "detail": "用户名已存在"
@@ -160,7 +160,7 @@ Authorization: Bearer {access_token}
     "id": 1,
     "username": "user@example.com",
     "email": "user@example.com",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -193,7 +193,7 @@ Authorization: Bearer {access_token}
     "id": 1,
     "username": "newusername",
     "email": "newemail@example.com",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -388,7 +388,7 @@ Authorization: Bearer {access_token}
     "image_id": 1,
     "raw_text": "识别出的文本内容...",
     "status": "done",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -488,7 +488,7 @@ Authorization: Bearer {access_token}
       "Translation": "永久业产..."
     },
     "status": "done",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -572,7 +572,7 @@ Authorization: Bearer {access_token}
     "structured_result_id": 1,
     "content": {},
     "status": "done",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -603,7 +603,7 @@ Authorization: Bearer {access_token}
   "message": "多任务创建成功",
   "multi_task_id": 1,
   "structured_result_ids": [1, 2, 3],
-  "created_at": "2024-01-01T12:00:00"
+  "created_at": "2024-01-01T12:00:00+00:00"
 }
 ```
 
@@ -629,7 +629,7 @@ Authorization: Bearer {access_token}
     "user_id": 1,
     "status": "done",
     "structured_result_ids": [1, 2, 3],
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -719,7 +719,7 @@ Authorization: Bearer {access_token}
     "multi_task_id": 1,
     "content": {},
     "status": "done",
-    "created_at": "2024-01-01T12:00:00"
+    "created_at": "2024-01-01T12:00:00+00:00"
   }
 }
 ```
@@ -773,12 +773,6 @@ Authorization: Bearer {access_token}
 - `401` - 认证失败或 Token 无效/过期
 - `404` - 资源不存在
 - `500` - 服务器错误
-
----
-
-## 速率限制
-
-目前无速率限制
 
 ---
 
