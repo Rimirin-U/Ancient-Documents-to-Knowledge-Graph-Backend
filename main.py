@@ -2,7 +2,7 @@
 import os
 import shutil
 import uuid
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -10,7 +10,7 @@ from typing import Optional, List
 from database import (
     init_db, get_db, Image, User, OcrResult, 
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
-    MultiTaskStructuredResult
+    MultiTaskStructuredResult, SessionLocal, OcrStatus
 )
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -157,6 +157,145 @@ multi_relation_graph_router = APIRouter(prefix="/api/v1/multi-relation-graphs", 
 
 # 智能问答路由
 chat_router = APIRouter(prefix="/api/v1/chat", tags=["智能问答"])
+
+# 适配器路由 (适配前端应用)
+adapter_router = APIRouter(tags=["适配器"])
+
+def process_image_pipeline(image_id: int):
+    """后台处理流水线"""
+    from analysis import analyze_ocr_result, analyze_structured_result
+    
+    db = SessionLocal()
+    try:
+        print(f"Starting pipeline for image {image_id}")
+        # 1. OCR
+        ocr_id = ocr_image_by_id(image_id, db)
+        if not ocr_id:
+            print(f"OCR failed for image {image_id}")
+            return
+            
+        # 2. Structure
+        struct_id = analyze_ocr_result(ocr_id, db)
+        if not struct_id:
+            print(f"Structure analysis failed for ocr {ocr_id}")
+            return
+            
+        # 3. Graph
+        analyze_structured_result(struct_id, db)
+        print(f"Pipeline completed for image {image_id}")
+    except Exception as e:
+        print(f"Pipeline error: {e}")
+    finally:
+        db.close()
+
+@adapter_router.post("/api/upload")
+async def adapter_upload(
+    background_tasks: BackgroundTasks,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """适配前端的上传接口 (无鉴权)"""
+    # 1. 保存文件
+    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
+    ext = os.path.splitext(image.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return JSONResponse(status_code=400, content={"success": False, "message": "不支持的文件类型"})
+    
+    try:
+        file_data = await image.read()
+        original_name = os.path.splitext(image.filename or "upload")[0]
+        unique_filename = f"{original_name}_{uuid.uuid4().hex[:8]}{ext}"
+        
+        # 确保目录存在 (绝对路径)
+        abs_upload_dir = os.path.abspath(UPLOAD_DIR)
+        if not os.path.exists(abs_upload_dir):
+            os.makedirs(abs_upload_dir)
+            
+        file_path = os.path.join(abs_upload_dir, unique_filename)
+        
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_data)
+            
+        # 2. 数据库记录 (默认用户ID 1)
+        # 检查用户1是否存在，不存在则创建
+        user = db.query(User).filter(User.id == 1).first()
+        if not user:
+            user = User(username="admin", password_hash=hash_password("admin"), email="admin@example.com")
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+        db_image = Image(
+            user_id=1,
+            filename=unique_filename,
+            path=file_path,
+            upload_time=datetime.now(timezone.utc)
+        )
+        db.add(db_image)
+        db.commit()
+        db.refresh(db_image)
+        
+        # 3. 触发后台任务
+        background_tasks.add_task(process_image_pipeline, db_image.id)
+        
+        return {
+            "success": True,
+            "analysisId": str(db_image.id), # 返回image_id作为analysisId
+            "message": "上传成功，正在后台分析..."
+        }
+        
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@adapter_router.get("/api/analysis/{analysis_id}")
+async def adapter_get_analysis(analysis_id: int, db: Session = Depends(get_db)):
+    """适配前端的获取分析结果接口 (无鉴权)"""
+    # analysis_id 这里实际是 image_id
+    image_id = analysis_id
+    
+    # 查询链条
+    # Image -> OcrResult (latest) -> StructuredResult (latest) -> RelationGraph (latest)
+    
+    ocr_result = db.query(OcrResult).filter(OcrResult.image_id == image_id).order_by(OcrResult.id.desc()).first()
+    
+    if not ocr_result:
+        # 还在处理OCR或者图片不存在
+        return {"txt": "正在识别文字...", "nodes": [], "links": [], "categories": []}
+        
+    if ocr_result.status == OcrStatus.FAILED:
+        return {"txt": "OCR识别失败", "nodes": [], "links": [], "categories": []}
+        
+    txt = ocr_result.raw_text
+    
+    structured_result = db.query(StructuredResult).filter(StructuredResult.ocr_result_id == ocr_result.id).order_by(StructuredResult.id.desc()).first()
+    
+    if not structured_result:
+        return {"txt": txt + "\n\n(正在进行结构化分析...)", "nodes": [], "links": [], "categories": []}
+        
+    relation_graph = db.query(RelationGraph).filter(RelationGraph.structured_result_id == structured_result.id).order_by(RelationGraph.id.desc()).first()
+    
+    if not relation_graph:
+        return {"txt": txt + "\n\n(正在生成关系图...)", "nodes": [], "links": [], "categories": []}
+        
+    # 解析图谱数据
+    try:
+        import json
+        content = json.loads(relation_graph.content)
+        # ECharts option format: series[0].data, series[0].links, series[0].categories
+        series = content.get("series", [{}])[0]
+        nodes = series.get("data", [])
+        links = series.get("links", [])
+        categories = series.get("categories", [])
+        
+        return {
+            "txt": txt,
+            "nodes": nodes,
+            "links": links,
+            "categories": categories
+        }
+    except Exception as e:
+        return {"txt": txt, "error": str(e), "nodes": [], "links": [], "categories": []}
+
 
 
 # 认证路由
@@ -1016,6 +1155,7 @@ app.include_router(relation_graph_router)
 app.include_router(multi_task_router)
 app.include_router(multi_relation_graph_router)
 app.include_router(chat_router)
+app.include_router(adapter_router)
 
 if __name__ == "__main__":
     import uvicorn

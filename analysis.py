@@ -84,26 +84,28 @@ def call_llm_for_structure(text: str) -> Dict[str, Any]:
         "Translation": "由于未配置有效的LLM API Key，无法生成翻译和精确提取。请配置DASHSCOPE_API_KEY环境变量。"
     }
 
-def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
+def analyze_ocr_result(ocr_result_id: int, db: Session) -> Optional[int]:
     """
     对OcrResult进行结构化分析
     
     Args:
         ocr_result_id: OCR结果的ID
         db: 数据库会话
+    Returns:
+        StructuredResult ID or None
     """
     try:
         # 获取OcrResult
         ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_result_id).first()
         if not ocr_result:
             print(f"OcrResult {ocr_result_id} not found")
-            return
+            return None
         
         if not ocr_result.raw_text:
             print(f"OcrResult {ocr_result_id} has no text")
             ocr_result.status = OcrStatus.FAILED
             db.commit()
-            return
+            return None
 
         # 更新状态
         # ocr_result.status = OcrStatus.PROCESSING # 已经是PROCESSING或DONE，这里不改OCR状态，而是创建新的记录
@@ -126,6 +128,7 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         db.add(structured_result)
         db.commit()
         print(f"Structured analysis for {ocr_result_id} completed.")
+        return structured_result.id
         
     except Exception as e:
         print(f"Error analyzing OCR result {ocr_result_id}: {str(e)}")
@@ -138,6 +141,7 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         )
         db.add(structured_result)
         db.commit()
+        return None
 
 
 def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, Any]:
@@ -217,7 +221,7 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
         "lineStyle": {"color": "source", "curveness": 0.3}
     }
 
-def analyze_structured_result(structured_result_id: int, db: Session) -> None:
+def analyze_structured_result(structured_result_id: int, db: Session) -> Optional[int]:
     """
     对StructuredResult进行关系图分析
     """
@@ -225,13 +229,13 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
         # 获取StructuredResult
         structured_result = db.query(StructuredResult).filter(StructuredResult.id == structured_result_id).first()
         if not structured_result:
-            return
+            return None
         
         try:
             data = json.loads(structured_result.content)
         except json.JSONDecodeError:
             print(f"Invalid JSON content in StructuredResult {structured_result_id}")
-            return
+            return None
             
         # 构建关系图
         graph_data = build_graph_from_structure(data, str(structured_result_id))
@@ -255,6 +259,7 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
         db.add(relation_graph)
         db.commit()
         print(f"Relation graph analysis for {structured_result_id} completed.")
+        return relation_graph.id
         
     except Exception as e:
         print(f"Error analyzing structured result {structured_result_id}: {str(e)}")
@@ -266,6 +271,7 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
         )
         db.add(relation_graph)
         db.commit()
+        return None
 
 
 def calculate_similarity(node1_attrs, node2_attrs):

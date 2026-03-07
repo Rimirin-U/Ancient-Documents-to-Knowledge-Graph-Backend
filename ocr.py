@@ -140,7 +140,7 @@ def ocr_image_by_id(image_id, db=None):
             ocr_result.status = OcrStatus.DONE
             db.commit()
 
-            return True
+            return ocr_result.id
 
         except Exception as e:
             # 更新 OcrResult 的状态为 FAILED
@@ -148,7 +148,7 @@ def ocr_image_by_id(image_id, db=None):
                 ocr_result.status = OcrStatus.FAILED
                 db.commit()
             print(f"OCR处理过程中发生错误 -> {e}")
-            return False
+            return None
 
     finally:
         if close_db:
