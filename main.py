@@ -125,6 +125,7 @@ app.add_middleware(
 
 # 存储
 UPLOAD_DIR = "pic"
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
@@ -500,8 +501,6 @@ async def upload_image(
     
     # 允许的文件扩展名
     ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
-    # 文件大小限制：10MB
-    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB   
     # 验证文件扩展名
     ext = os.path.splitext(image.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
