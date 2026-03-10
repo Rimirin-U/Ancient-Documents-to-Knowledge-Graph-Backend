@@ -9,7 +9,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship, mapped_
 
 # 数据库路径
 DB_DIR = "database"
-DB_NAME = "app.db"
+DB_NAME = "app_test.db"
 DB_PATH = os.path.join(DB_DIR, DB_NAME)
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 

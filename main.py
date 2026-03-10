@@ -1,5 +1,6 @@
 
 import os
+print("main.py started")
 import shutil
 import uuid
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter, BackgroundTasks
@@ -7,11 +8,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, List
+print("importing database")
 from database import (
     init_db, get_db, Image, User, OcrResult, 
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
     MultiTaskStructuredResult, SessionLocal, OcrStatus
 )
+print("database imported")
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -20,7 +23,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import warnings
 
+print("importing ocr")
 from ocr import ocr_image_by_id
+print("ocr imported")
 
 # 加载.env
 load_dotenv()
@@ -1185,4 +1190,4 @@ app.include_router(adapter_router)
 if __name__ == "__main__":
     import uvicorn
     # 启动服务
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    uvicorn.run(app, host="0.0.0.0", port=3001)

@@ -5,12 +5,12 @@ import re
 from database import SessionLocal, Image, OcrResult, OcrStatus
 
 # 尝试导入 PaddleOCRVL
-try:
-    from paddleocr import PaddleOCRVL
-    HAS_PADDLEOCR = True
-except Exception as e:
-    print(f"Warning: PaddleOCRVL import failed ({e}), using mock OCR.")
-    HAS_PADDLEOCR = False
+# try:
+#     from paddleocr import PaddleOCRVL
+#     HAS_PADDLEOCR = True
+# except Exception as e:
+#     print(f"Warning: PaddleOCRVL import failed ({e}), using mock OCR.")
+HAS_PADDLEOCR = False
 
 class MockPaddleOCRVL:
     def predict(self, image_path):

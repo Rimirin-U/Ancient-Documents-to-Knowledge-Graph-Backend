@@ -5,10 +5,11 @@ import time
 from typing import Optional
 
 # API 基础 URL
-BASE_URL = "http://localhost:8000/api/v1"
+BASE_URL = "http://localhost:3001/api/v1"
 
 # 测试数据
-TEST_USERNAME = "test_user"
+import uuid
+TEST_USERNAME = f"test_user_{uuid.uuid4().hex[:8]}"
 TEST_PASSWORD = "test_password123"
 TEST_IMAGE_PATH = "api_test/test_img/test_img.jpg"
 
