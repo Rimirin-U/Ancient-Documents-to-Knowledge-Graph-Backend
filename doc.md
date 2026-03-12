@@ -315,6 +315,54 @@ Authorization: Bearer {access_token}
 
 ---
 
+### GET /api/v1/images/{image_id}/thumbnail
+获取指定图片的缩略图。
+
+**路径参数**
+- `image_id` (path, integer) - 图片ID
+
+**请求头**
+```
+Authorization: Bearer {access_token}
+```
+
+**响应** (200)
+- 返回图片缩略图（二进制数据）
+
+**错误响应**
+- 404: 图片不存在或文件找不到
+
+---
+
+### GET /api/v1/images/{image_id}/info
+获取指定图片的基本信息。
+
+**路径参数**
+- `image_id` (path, integer) - 图片ID
+
+**请求头**
+```
+Authorization: Bearer {access_token}
+```
+
+**响应** (200)
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "filename": "photo_a1b2c3d4.jpg",
+    "upload_time": "2024-01-01T12:00:00",
+    "title": "暂无标题"
+  }
+}
+```
+
+**错误响应**
+- 404: 图片不存在
+
+---
+
 ### POST /api/v1/images/{image_id}/ocr
 对指定图片执行 OCR 识别（异步处理）。
 

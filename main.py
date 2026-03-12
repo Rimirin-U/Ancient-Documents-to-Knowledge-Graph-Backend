@@ -430,6 +430,52 @@ async def get_pic(
         raise HTTPException(status_code=404, detail="image file not found")
     return FileResponse(str(db_image.path))
 
+# GET /api/v1/images/{image_id} - 获取图片缩略图
+@images_router.get("/{image_id}/thumbnail")
+async def get_thumbnail(
+    image_id: int, 
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+    
+    # temp: 返回原图
+    db_image = db.query(Image).filter(Image.id == image_id).first()
+    if not db_image:
+        raise HTTPException(status_code=404, detail="image not found")
+    if not os.path.exists(str(db_image.path)):
+        raise HTTPException(status_code=404, detail="image file not found")
+    return FileResponse(str(db_image.path))
+
+# GET /api/v1/images/{image_id}/info - 获取图片基本信息
+@images_router.get("/{image_id}/info")
+async def get_image_info(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """获取指定图片的基本信息"""
+    # 验证token
+    token = credentials.credentials
+    verify_token(token)
+
+    # 从数据库查询图片信息
+    db_image = db.query(Image).filter(Image.id == image_id).first()
+    if not db_image:
+        raise HTTPException(status_code=404, detail="image not found")
+
+    return {
+        "success": True,
+        "data": {
+            "id": db_image.id,
+            "filename": db_image.filename,
+            "upload_time": db_image.upload_time.isoformat(),
+            "title": "title_test"
+        }
+    }
+
 # GET /api/v1/users/images - 获取当前用户的图片列表
 @users_router.get("/images")
 async def get_user_images(
