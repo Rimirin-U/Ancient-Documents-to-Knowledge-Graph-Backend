@@ -490,11 +490,8 @@ async def get_thumbnail(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     # 验证token
-    bearer_token = credentials.credentials if credentials else None
-    auth_token = bearer_token or token
-    if not auth_token:
-        raise HTTPException(status_code=401, detail="缺少token")
-    verify_token(auth_token)
+    token = credentials.credentials
+    verify_token(token)
     
     # temp: 返回原图
     db_image = db.query(Image).filter(Image.id == image_id).first()
