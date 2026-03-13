@@ -337,8 +337,56 @@ Authorization: Bearer {access_token}
 **响应** (200)
 - 返回图片缩略图（二进制数据）
 
+**响应类型**
+- `image/jpeg`
+
 **错误响应**
 - 404: 图片不存在或文件找不到
+
+---
+
+### DELETE /api/v1/images/{image_id}
+删除指定图片，并级联清理其分析结果。
+
+删除范围包括：
+- 图片记录与原图文件
+- 该图片下的 OCR 结果
+- 该图片下 OCR 对应的结构化结果
+- 结构化结果对应的关系图
+- 多任务关联表中与上述结构化结果关联的记录
+- 缩略图缓存文件（若存在）
+
+**路径参数**
+- `image_id` (path, integer) - 图片ID
+
+**请求头**
+```
+Authorization: Bearer {access_token}
+```
+
+**成功响应** (200)
+```json
+{
+  "success": true,
+  "message": "图片及关联分析结果已删除",
+  "deleted": {
+    "image_id": 1,
+    "ocr_results": 2,
+    "structured_results": 2,
+    "relation_graphs": 2,
+    "multi_task_associations": 1,
+    "removed_files": [
+      "pic/photo_a1b2c3d4.jpg",
+      "pic/thumbnails/photo_a1b2c3d4_thumb.jpg"
+    ]
+  }
+}
+```
+
+**错误响应**
+- 403: 无权删除该图片
+- 404: 图片不存在
+- 500: 删除失败
 
 ---
 

@@ -19,6 +19,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import warnings
+from PIL import Image as PILImage, UnidentifiedImageError
 
 from ocr import ocr_image_by_id
 
@@ -113,6 +114,28 @@ def verify_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token无效")
 
+
+def build_thumbnail_path(filename: str) -> str:
+    """根据原图文件名构造缩略图文件路径。"""
+    stem, _ = os.path.splitext(filename)
+    return os.path.join(THUMBNAIL_DIR, f"{stem}_thumb.jpg")
+
+
+def ensure_thumbnail_exists(image_path: str, thumbnail_path: str, size: tuple[int, int] = (320, 320)) -> None:
+    """按需生成缩略图并持久化到磁盘。"""
+    if os.path.exists(thumbnail_path):
+        return
+
+    try:
+        with PILImage.open(image_path) as img:
+            rgb_img = img.convert("RGB")
+            rgb_img.thumbnail(size)
+            rgb_img.save(thumbnail_path, format="JPEG", quality=85, optimize=True)
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=400, detail="无法识别的图片格式")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成缩略图失败: {str(e)}")
+
 def run_auto_image_pipeline(image_id: int) -> None:
     """后台串行执行 OCR -> 结构化提取 -> 关系图生成。"""
     db = SessionLocal()
@@ -174,6 +197,10 @@ app.add_middleware(
 UPLOAD_DIR = "pic"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+THUMBNAIL_DIR = os.path.join(UPLOAD_DIR, "thumbnails")
+if not os.path.exists(THUMBNAIL_DIR):
+    os.makedirs(THUMBNAIL_DIR)
 
 
 # 路由分组
@@ -380,7 +407,7 @@ async def read_root():
 async def upload_image(
     image: UploadFile = File(...), 
     user_id: int = 1, 
-    background_tasks: BackgroundTasks = None,
+    #background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
@@ -442,8 +469,11 @@ async def upload_image(
         db.commit()
         db.refresh(db_image)
 
-        if background_tasks is not None:
-            background_tasks.add_task(run_auto_image_pipeline, db_image.id)
+        # 异步执行OCR和后续分析流程
+        # 后续改为消息队列
+        # temp: 禁用
+        #if background_tasks is not None:
+            #background_tasks.add_task(run_auto_image_pipeline, db_image.id)
         
         return {
             "success": True,
@@ -499,7 +529,84 @@ async def get_thumbnail(
         raise HTTPException(status_code=404, detail="image not found")
     if not os.path.exists(str(db_image.path)):
         raise HTTPException(status_code=404, detail="image file not found")
-    return FileResponse(str(db_image.path))
+
+    thumbnail_path = build_thumbnail_path(db_image.filename)
+    ensure_thumbnail_exists(str(db_image.path), thumbnail_path)
+    return FileResponse(thumbnail_path, media_type="image/jpeg")
+
+
+# DELETE /api/v1/images/{image_id} - 删除图片及其相关分析结果
+@images_router.delete("/{image_id}")
+async def delete_image(
+    image_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """删除图片，并清理其 OCR/结构化/关系图结果及缩略图文件。"""
+    token = credentials.credentials
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
+
+    db_image = db.query(Image).filter(Image.id == image_id).first()
+    if not db_image:
+        raise HTTPException(status_code=404, detail="image not found")
+
+    if db_image.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权删除该图片")
+
+    original_path = str(db_image.path)
+    thumbnail_path = build_thumbnail_path(db_image.filename)
+
+    structured_ids_query = (
+        db.query(StructuredResult.id)
+        .join(OcrResult, StructuredResult.ocr_result_id == OcrResult.id)
+        .filter(OcrResult.image_id == image_id)
+    )
+
+    deleted_ocr_count = db.query(OcrResult).filter(OcrResult.image_id == image_id).count()
+    deleted_structured_count = (
+        db.query(StructuredResult)
+        .join(OcrResult, StructuredResult.ocr_result_id == OcrResult.id)
+        .filter(OcrResult.image_id == image_id)
+        .count()
+    )
+    deleted_relation_count = db.query(RelationGraph).filter(RelationGraph.structured_result_id.in_(structured_ids_query)).count()
+    deleted_association_count = db.query(MultiTaskStructuredResult).filter(MultiTaskStructuredResult.structured_result_id.in_(structured_ids_query)).count()
+
+    try:
+        # 对旧库结构做兼容：显式删除下游记录，避免因历史未开启外键级联导致残留。
+        db.query(MultiTaskStructuredResult).filter(MultiTaskStructuredResult.structured_result_id.in_(structured_ids_query)).delete(synchronize_session=False)
+        db.query(RelationGraph).filter(RelationGraph.structured_result_id.in_(structured_ids_query)).delete(synchronize_session=False)
+        db.query(StructuredResult).filter(StructuredResult.id.in_(structured_ids_query)).delete(synchronize_session=False)
+        db.query(OcrResult).filter(OcrResult.image_id == image_id).delete(synchronize_session=False)
+        db.delete(db_image)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除图片失败: {str(e)}")
+
+    removed_files: List[str] = []
+    for path in (original_path, thumbnail_path):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed_files.append(path)
+        except OSError:
+            # 文件删除失败不影响数据库事务，避免出现“已删除数据库但接口报错”的不一致体验。
+            pass
+
+    return {
+        "success": True,
+        "message": "图片及关联分析结果已删除",
+        "deleted": {
+            "image_id": image_id,
+            "ocr_results": deleted_ocr_count,
+            "structured_results": deleted_structured_count,
+            "relation_graphs": deleted_relation_count,
+            "multi_task_associations": deleted_association_count,
+            "removed_files": removed_files
+        }
+    }
 
 # GET /api/v1/images/{image_id}/info - 获取图片基本信息
 @images_router.get("/{image_id}/info")
