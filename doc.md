@@ -713,6 +713,50 @@ Authorization: Bearer {access_token}
 
 ---
 
+### POST /api/v1/multi-tasks/from-images
+根据多个图片ID创建跨文档分析任务。
+
+根据每个图片最后一个（id最大）OCR结果的最后一个结构化结果，自动关联并创建跨文档分析任务。
+
+**请求头**
+```
+Authorization: Bearer {access_token}
+```
+
+**请求体**
+```json
+{
+  "image_ids": [1, 2, 3]
+}
+```
+
+**成功响应** (200)
+```json
+{
+  "success": true,
+  "message": "多任务创建成功",
+  "multi_task_id": 1,
+  "image_ids": [1, 2, 3],
+  "structured_result_ids": [5, 8, 12],
+  "created_at": "2024-01-01T12:00:00"
+}
+```
+
+**失败响应** (404)
+以下情况会返回404错误：
+- 任意图片不存在：`"detail": "图片 {image_id} 不存在"`
+- 任意图片没有OCR结果：`"detail": "图片 {image_id} 没有OCR结果"`
+- 任意图片的最新OCR结果没有结构化结果：`"detail": "图片 {image_id} 的最新OCR结果没有结构化结果"`
+
+**失败响应** (500)
+```json
+{
+  "detail": "创建失败: {错误信息}"
+}
+```
+
+---
+
 ### GET /api/v1/multi-tasks/{multi_task_id}
 获取指定多任务的详细信息。
 
@@ -914,7 +958,8 @@ GET  /api/v1/relation-graphs/{relationGraphId}      -> 获取关系图详情
 
 #### 4. 跨文档分析流程
 ```
-POST /api/v1/multi-tasks                            -> 创建跨文档任务
+POST /api/v1/multi-tasks                            -> 创建跨文档任务（直接提供结构化结果ID）
+POST /api/v1/multi-tasks/from-images                -> 根据图片ID自动创建跨文档任务
 POST /api/v1/multi-relation-graphs                  -> 创建跨文档分析任务
 GET  /api/v1/multi-relation-graphs/{multiGraphId}   -> 获取跨文档分析结果
 ```

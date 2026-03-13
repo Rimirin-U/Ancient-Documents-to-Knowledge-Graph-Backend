@@ -78,6 +78,9 @@ class CreateRelationGraphRequest(BaseModel):
 class CreateMultiTaskRequest(BaseModel):
     structured_result_ids: List[int]
 
+class CreateMultiTaskByImagesRequest(BaseModel):
+    image_ids: List[int]
+
 class CreateMultiRelationGraphRequest(BaseModel):
     multi_task_id: int
 
@@ -1020,6 +1023,87 @@ async def create_multi_task(
     except Exception as e:
         db.rollback()
         return {"success": False, "message": f"创建失败: {str(e)}"}
+
+# POST /api/v1/multi-tasks/from-images - 根据图片ID创建跨文档分析任务
+@multi_task_router.post("/from-images")
+async def create_multi_task_from_images(
+    request: CreateMultiTaskByImagesRequest,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """根据多个图片ID，获取每个图片最后一个OCR结果的最后一个结构化结果，创建跨文档分析任务"""
+    # 验证token
+    token = credentials.credentials
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
+    
+    # 验证用户存在
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    # 对每个image_id，获取最后一个OCR结果的最后一个结构化结果
+    structured_result_ids = []
+    for image_id in request.image_ids:
+        # 验证图片存在
+        image = db.query(Image).filter(Image.id == image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail=f"图片 {image_id} 不存在")
+        
+        # 获取该图片最后一个OCR结果（id最大）
+        latest_ocr = (
+            db.query(OcrResult)
+            .filter(OcrResult.image_id == image_id)
+            .order_by(OcrResult.id.desc())
+            .first()
+        )
+        if not latest_ocr:
+            raise HTTPException(status_code=404, detail=f"图片 {image_id} 没有OCR结果")
+        
+        # 获取该OCR结果最后一个结构化结果（id最大）
+        latest_structured = (
+            db.query(StructuredResult)
+            .filter(StructuredResult.ocr_result_id == latest_ocr.id)
+            .order_by(StructuredResult.id.desc())
+            .first()
+        )
+        if not latest_structured:
+            raise HTTPException(status_code=404, detail=f"图片 {image_id} 的最新OCR结果没有结构化结果")
+        
+        structured_result_ids.append(latest_structured.id)
+    
+    # 创建MultiTask
+    try:
+        multi_task = MultiTask(
+            user_id=user_id,
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(multi_task)
+        db.commit()
+        db.refresh(multi_task)
+        
+        # 创建关联关系
+        for sr_id in structured_result_ids:
+            association = MultiTaskStructuredResult(
+                multi_task_id=multi_task.id,
+                structured_result_id=sr_id,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(association)
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "多任务创建成功",
+            "multi_task_id": multi_task.id,
+            "image_ids": request.image_ids,
+            "structured_result_ids": structured_result_ids,
+            "created_at": multi_task.created_at.isoformat()
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {str(e)}")
 
 # GET /api/v1/multi-tasks/{multi_task_id} - 获取指定MultiTask
 @multi_task_router.get("/{multi_task_id}")
