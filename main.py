@@ -1173,6 +1173,47 @@ async def get_user_multi_tasks(
         }
     }
 
+# DELETE /api/v1/multi-tasks/{multi_task_id} - 删除多任务及其关联结果
+@multi_task_router.delete("/{multi_task_id}")
+async def delete_multi_task(
+    multi_task_id: int,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """删除多任务，并清理其多关系图和关联记录。"""
+    token = credentials.credentials
+    payload = verify_token(token)
+    user_id = payload.get("user_id")
+
+    multi_task = db.query(MultiTask).filter(MultiTask.id == multi_task_id).first()
+    if not multi_task:
+        raise HTTPException(status_code=404, detail="多任务不存在")
+
+    if multi_task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权删除该多任务")
+
+    # 计数统计
+    deleted_multi_relation_count = db.query(MultiRelationGraph).filter(MultiRelationGraph.multi_task_id == multi_task_id).count()
+    deleted_association_count = db.query(MultiTaskStructuredResult).filter(MultiTaskStructuredResult.multi_task_id == multi_task_id).count()
+
+    try:
+        # 由于配置了cascade，直接删除MultiTask会自动清理关联的MultiRelationGraph和MultiTaskStructuredResult
+        db.delete(multi_task)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
+    return {
+        "success": True,
+        "message": "多任务及关联分析结果已删除",
+        "deleted": {
+            "multi_task_id": multi_task_id,
+            "multi_relation_graphs": deleted_multi_relation_count,
+            "multi_task_associations": deleted_association_count
+        }
+    }
+
 
 # 跨文档关系图路由
 

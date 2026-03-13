@@ -784,6 +784,42 @@ Authorization: Bearer {access_token}
 
 ---
 
+### DELETE /api/v1/multi-tasks/{multi_task_id}
+删除指定多任务，并级联清理其分析结果。
+
+删除范围包括：
+- 多任务记录
+- 多任务关联的结构化结果关联表中的记录
+- 多任务下的所有跨文档关系图
+
+**路径参数**
+- `multi_task_id` (path, integer) - 多任务ID
+
+**请求头**
+```
+Authorization: Bearer {access_token}
+```
+
+**成功响应** (200)
+```json
+{
+  "success": true,
+  "message": "多任务及关联分析结果已删除",
+  "deleted": {
+    "multi_task_id": 1,
+    "multi_relation_graphs": 2,
+    "multi_task_associations": 3
+  }
+}
+```
+
+**错误响应**
+- 403: 无权删除该多任务
+- 404: 多任务不存在
+- 500: 删除失败
+
+---
+
 ### GET /api/v1/multi-tasks/{multi_task_id}/multi-relation-graphs
 获取指定多任务的跨文档关系图列表（分页）。
 
