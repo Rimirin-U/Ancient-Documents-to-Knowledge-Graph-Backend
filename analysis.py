@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import (
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
-    OcrResult, OcrStatus, MultiTaskStructuredResult
+    OcrResult, OcrStatus, MultiTaskStructuredResult, get_beijing_time
 )
 
 # 尝试导入 dashscope，如果不存在则使用模拟
@@ -120,7 +120,7 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
             ocr_result_id=ocr_result_id,
             content=json.dumps(structured_data, ensure_ascii=False),
             status=OcrStatus.DONE,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         
         db.add(structured_result)
@@ -134,7 +134,7 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
             ocr_result_id=ocr_result_id,
             content=json.dumps({"error": str(e)}),
             status=OcrStatus.FAILED,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         db.add(structured_result)
         db.commit()
@@ -249,7 +249,7 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
             structured_result_id=structured_result_id,
             content=json.dumps(echarts_option, ensure_ascii=False),
             status=OcrStatus.DONE,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         
         db.add(relation_graph)
@@ -262,7 +262,7 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
             structured_result_id=structured_result_id,
             content=json.dumps({"error": str(e)}),
             status=OcrStatus.FAILED,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         db.add(relation_graph)
         db.commit()
@@ -538,7 +538,7 @@ def analyze_multi_task(multi_task_id: int, db: Session) -> None:
             multi_task_id=multi_task_id,
             content=json.dumps(echarts_option, ensure_ascii=False),
             status=OcrStatus.DONE,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         
         db.add(multi_relation_graph)
@@ -551,7 +551,7 @@ def analyze_multi_task(multi_task_id: int, db: Session) -> None:
             multi_task_id=multi_task_id,
             content=json.dumps({"error": str(e)}),
             status=OcrStatus.FAILED,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         db.add(multi_relation_graph)
         db.commit()

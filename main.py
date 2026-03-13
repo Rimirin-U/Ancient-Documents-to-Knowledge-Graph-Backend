@@ -10,7 +10,7 @@ from typing import Optional, List
 from database import (
     SessionLocal, init_db, get_db, Image, User, OcrResult, 
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
-    MultiTaskStructuredResult
+    MultiTaskStructuredResult, get_beijing_time
 )
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -100,9 +100,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     """创建JWT token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = get_beijing_time() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = get_beijing_time() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, str(SECRET_KEY), algorithm=ALGORITHM)
     return encoded_jwt
@@ -252,7 +252,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         username=request.username,
         email=request.email,
         password_hash=hashed_password,
-        created_at=datetime.now(timezone.utc)
+        created_at=get_beijing_time()
     )
     db.add(db_user)
     db.commit()
@@ -466,7 +466,7 @@ async def upload_image(
             user_id=user_id,
             filename=unique_filename,
             path=file_path,
-            upload_time=datetime.now(timezone.utc)
+            upload_time=get_beijing_time()
         )
         db.add(db_image)
         db.commit()
@@ -996,7 +996,7 @@ async def create_multi_task(
     try:
         multi_task = MultiTask(
             user_id=user_id,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         db.add(multi_task)
         db.commit()
@@ -1007,7 +1007,7 @@ async def create_multi_task(
             association = MultiTaskStructuredResult(
                 multi_task_id=multi_task.id,
                 structured_result_id=sr_id,
-                created_at=datetime.now(timezone.utc)
+                created_at=get_beijing_time()
             )
             db.add(association)
         
@@ -1076,7 +1076,7 @@ async def create_multi_task_from_images(
     try:
         multi_task = MultiTask(
             user_id=user_id,
-            created_at=datetime.now(timezone.utc)
+            created_at=get_beijing_time()
         )
         db.add(multi_task)
         db.commit()
@@ -1087,7 +1087,7 @@ async def create_multi_task_from_images(
             association = MultiTaskStructuredResult(
                 multi_task_id=multi_task.id,
                 structured_result_id=sr_id,
-                created_at=datetime.now(timezone.utc)
+                created_at=get_beijing_time()
             )
             db.add(association)
         

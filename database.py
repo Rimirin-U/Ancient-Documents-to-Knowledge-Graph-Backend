@@ -3,7 +3,7 @@
 """
 import os
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlite3 import Connection as SQLite3Connection
 from sqlalchemy import create_engine, Integer, String, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, mapped_column, Mapped
@@ -33,6 +33,12 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA foreign_keys=ON;")
         cursor.close()
 
+# 获取北京时间（UTC+8）
+def get_beijing_time():
+    """获取北京时间（东八区）"""
+    tz_beijing = timezone(timedelta(hours=8))
+    return datetime.now(tz_beijing)
+
 # 基类
 Base = declarative_base()
 
@@ -53,7 +59,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     email: Mapped[str] = mapped_column(String, nullable=True)
     password_hash: Mapped[str] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     images = relationship("Image", back_populates="user", cascade="all, delete-orphan", passive_deletes=True)
@@ -67,7 +73,7 @@ class Image(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     filename: Mapped[str] = mapped_column(String)
     path: Mapped[str] = mapped_column(String)
-    upload_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    upload_time: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     user = relationship("User", back_populates="images")
@@ -82,7 +88,7 @@ class OcrResult(Base):
     image_id: Mapped[int] = mapped_column(Integer, ForeignKey("image.id", ondelete="CASCADE"), index=True)
     raw_text: Mapped[str] = mapped_column(String)
     status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     image = relationship("Image", back_populates="ocr_results")
@@ -97,7 +103,7 @@ class StructuredResult(Base):
     ocr_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("ocr_result.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(String)  # JSON格式
     status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     ocr_result = relationship("OcrResult", back_populates="structured_results")
@@ -113,7 +119,7 @@ class RelationGraph(Base):
     structured_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("structured_result.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(String)  # JSON格式
     status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     structured_result = relationship("StructuredResult", back_populates="relation_graphs")
@@ -126,7 +132,7 @@ class MultiTask(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     user = relationship("User")
@@ -142,7 +148,7 @@ class MultiRelationGraph(Base):
     multi_task_id: Mapped[int] = mapped_column(Integer, ForeignKey("multi_task.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(String)  # JSON格式
     status: Mapped[OcrStatus] = mapped_column(SQLEnum(OcrStatus), default=OcrStatus.PROCESSING)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     multi_task = relationship("MultiTask", back_populates="multi_relation_graphs")
@@ -155,7 +161,7 @@ class MultiTaskStructuredResult(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     multi_task_id: Mapped[int] = mapped_column(Integer, ForeignKey("multi_task.id", ondelete="CASCADE"), index=True)
     structured_result_id: Mapped[int] = mapped_column(Integer, ForeignKey("structured_result.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=get_beijing_time)
     
     # 关系
     multi_task = relationship("MultiTask", back_populates="structured_result_associations")
