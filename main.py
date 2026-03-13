@@ -2,13 +2,13 @@
 import os
 import shutil
 import uuid
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, APIRouter, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, List
 from database import (
-    init_db, get_db, Image, User, OcrResult, 
+    SessionLocal, init_db, get_db, Image, User, OcrResult, 
     StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
     MultiTaskStructuredResult
 )
@@ -43,6 +43,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # HTTP Bearer scheme
 security = HTTPBearer()
+# Optional HTTP Bearer scheme（用于不方便设置请求头的场景，如 img src）
+security_optional = HTTPBearer(auto_error=False)
 
 app = FastAPI()
 
@@ -110,6 +112,51 @@ def verify_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token已过期")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token无效")
+
+def run_auto_image_pipeline(image_id: int) -> None:
+    """后台串行执行 OCR -> 结构化提取 -> 关系图生成。"""
+    db = SessionLocal()
+    try:
+        from analysis import analyze_ocr_result, analyze_structured_result
+
+        # 记录调用前该图片最新 OCR id，便于定位本次新建记录
+        latest_before = (
+            db.query(OcrResult.id)
+            .filter(OcrResult.image_id == image_id)
+            .order_by(OcrResult.id.desc())
+            .first()
+        )
+        latest_before_id = latest_before[0] if latest_before else 0
+
+        ocr_success = ocr_image_by_id(image_id, db)
+        if not ocr_success:
+            return
+
+        ocr_result = (
+            db.query(OcrResult)
+            .filter(OcrResult.image_id == image_id, OcrResult.id > latest_before_id)
+            .order_by(OcrResult.id.asc())
+            .first()
+        )
+        if not ocr_result:
+            return
+
+        analyze_ocr_result(ocr_result.id, db)
+
+        structured_result = (
+            db.query(StructuredResult)
+            .filter(StructuredResult.ocr_result_id == ocr_result.id)
+            .order_by(StructuredResult.id.desc())
+            .first()
+        )
+        if not structured_result:
+            return
+
+        analyze_structured_result(structured_result.id, db)
+    except Exception as e:
+        print(f"后台自动处理失败(image_id={image_id}): {str(e)}")
+    finally:
+        db.close()
 
 # 数据库初始化
 init_db()
@@ -333,6 +380,7 @@ async def read_root():
 async def upload_image(
     image: UploadFile = File(...), 
     user_id: int = 1, 
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
@@ -393,13 +441,17 @@ async def upload_image(
         db.add(db_image)
         db.commit()
         db.refresh(db_image)
+
+        if background_tasks is not None:
+            background_tasks.add_task(run_auto_image_pipeline, db_image.id)
         
         return {
             "success": True,
             "imageId": db_image.id,
             "filename": db_image.filename,
             "originalName": image.filename,
-            "fileSize": file_size
+            "fileSize": file_size,
+            "pipeline_started": True
         }
     except Exception as e:
         db.rollback()
@@ -438,8 +490,11 @@ async def get_thumbnail(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     # 验证token
-    token = credentials.credentials
-    verify_token(token)
+    bearer_token = credentials.credentials if credentials else None
+    auth_token = bearer_token or token
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="缺少token")
+    verify_token(auth_token)
     
     # temp: 返回原图
     db_image = db.query(Image).filter(Image.id == image_id).first()

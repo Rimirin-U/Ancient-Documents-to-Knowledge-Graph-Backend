@@ -259,6 +259,13 @@ Authorization: Bearer {access_token}
 ### POST /api/v1/images/upload
 上传图片文件。
 
+上传成功后，系统会在后台异步自动执行以下流程：
+- OCR 识别
+- 结构化信息提取
+- 关系图生成
+
+接口会立即返回，不会等待上述流程完成。
+
 **请求头**
 ```
 Authorization: Bearer {access_token}
@@ -282,7 +289,8 @@ Content-Type: multipart/form-data
   "imageId": 1,
   "filename": "photo_a1b2c3d4.jpg",
   "originalName": "photo.jpg",
-  "fileSize": 250000
+  "fileSize": 250000,
+  "pipeline_started": true
 }
 ```
 
@@ -842,7 +850,7 @@ POST /api/v1/auth/login     -> 登录，获得 access_token
 
 #### 2. 图片处理流程
 ```
-POST /api/v1/images/upload              -> 上传图片，获得 imageId
+POST /api/v1/images/upload              -> 上传图片，获得 imageId（自动异步触发 OCR/结构化/关系图）
 POST /api/v1/images/{imageId}/ocr       -> 触发 OCR 识别
 GET  /api/v1/images/{imageId}/ocr-results  -> 获取 OCR 结果列表
 GET  /api/v1/ocr-results/{ocrId}        -> 获取单个 OCR 结果详情
