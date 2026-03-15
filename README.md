@@ -1,6 +1,6 @@
 ## Python
 
-`python 3.12.9`
+`python 3.11`
 
 ## 安装依赖
 
@@ -19,13 +19,13 @@ ALGORITHM
 ## 启动服务器
 
 ```bash
-uvicorn main:app
+uvicorn main:app --host 0.0.0.0 --port 3000
 ```
 
 开发用 - 启动服务器并开启热重载：
 
 ```bash
-uvicorn main:app -reload
+uvicorn main:app --host 0.0.0.0 --port 3000 -reload
 ```
 
 ## API测试
