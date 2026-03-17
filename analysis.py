@@ -142,49 +142,33 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
 
 def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, Any]:
     """
-    基于结构化数据构建单文档关系图。
-    以"地契"为中心节点，辐射出人员节点（卖方/买方/中人）和关键信息节点（时间/地点/价格/标的）。
+    基于结构化数据构建单文档关系图（与 app/services/analysis_service.py 保持同步）。
+    节点不设 id 字段，连线直接用节点 name，避免 ECharts 按 id 匹配导致连线断开。
     """
-    nodes = []
-    links = []
+    nodes: list = []
+    links: list = []
     categories = [
-        {"name": "卖方"},
-        {"name": "买方"},
-        {"name": "中人"},
-        {"name": "契约"},
-        {"name": "信息"},
+        {"name": "卖方"}, {"name": "买方"}, {"name": "中人"}, {"name": "契约"}, {"name": "信息"},
     ]
-
-    def nid(suffix: str) -> str:
-        return f"{doc_id}_{suffix}"
 
     def is_empty(val) -> bool:
         return not val or str(val).strip() in ["未识别", "未知", "None", ""]
 
-    def truncate(val: str, max_len: int = 12) -> str:
+    def truncate(val: str, max_len: int = 10) -> str:
         s = str(val).strip()
         return s[:max_len] + "…" if len(s) > max_len else s
 
-    # ── 中心：地契节点 ──────────────────────────────────────────────
-    contract_id = nid("contract")
+    CONTRACT = "地契"
     nodes.append({
-        "id": contract_id,
-        "name": "地契",
-        "category": 3,
-        "symbolSize": 58,
-        "symbol": "diamond",
-        "value": "contract",
-        "label": {
-            "show": True,
-            "position": "inside",
-            "fontSize": 16,
-            "fontWeight": "bold",
-            "color": "#fff",
-        },
+        "name": CONTRACT, "category": 3, "symbolSize": 62, "symbol": "diamond",
+        "value": "地契",
+        "itemStyle": {"color": "#d97706", "borderColor": "#fbbf24", "borderWidth": 2},
+        "label": {"show": True, "position": "inside", "fontSize": 16, "fontWeight": "bold", "color": "#fff"},
     })
 
-    # ── 人员节点 ────────────────────────────────────────────────────
-    def add_person(field_key: str, category_idx: int, rel_label: str, direction: str):
+    ROLE_COLORS = {0: "#dc2626", 1: "#2563eb", 2: "#059669"}
+
+    def add_person(field_key: str, category_idx: int, rel_label: str, to_contract: bool):
         val = data.get(field_key)
         if is_empty(val):
             return
@@ -192,83 +176,45 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
         if any(n["name"] == name for n in nodes):
             return
         nodes.append({
-            "id": nid(name),
-            "name": name,
-            "category": category_idx,
-            "symbolSize": 46,
-            "symbol": "circle",
+            "name": name, "category": category_idx, "symbolSize": 48, "symbol": "circle",
             "value": name,
-            "label": {
-                "show": True,
-                "position": "bottom",
-                "fontSize": 14,
-                "fontWeight": "bold",
-            },
+            "itemStyle": {"color": ROLE_COLORS[category_idx], "borderColor": "#fff", "borderWidth": 2},
+            "label": {"show": True, "position": "bottom", "fontSize": 13, "fontWeight": "bold", "color": ROLE_COLORS[category_idx]},
         })
-        src, tgt = (nid(name), contract_id) if direction == "to_contract" else (contract_id, nid(name))
+        src, tgt = (name, CONTRACT) if to_contract else (CONTRACT, name)
         links.append({
-            "source": src,
-            "target": tgt,
-            "value": rel_label,
-            "label": {"show": True, "formatter": rel_label, "fontSize": 11},
-            "lineStyle": {"width": 2.5},
+            "source": src, "target": tgt, "value": rel_label,
+            "label": {"show": True, "formatter": rel_label, "fontSize": 11, "fontWeight": "bold"},
+            "lineStyle": {"width": 2.5, "color": ROLE_COLORS[category_idx]},
         })
 
-    add_person("Seller",    0, "卖出", "to_contract")
-    add_person("Buyer",     1, "买入", "from_contract")
-    add_person("Middleman", 2, "见证", "to_contract")
+    add_person("Seller", 0, "卖出", True)
+    add_person("Buyer", 1, "买入", False)
+    add_person("Middleman", 2, "见证", True)
 
-    # ── 信息节点 ────────────────────────────────────────────────────
-    info_fields = [
-        ("Time",     "时间"),
-        ("Time_AD",  "公元"),
-        ("Location", "地点"),
-        ("Price",    "价格"),
-        ("Subject",  "标的"),
-    ]
-
-    for field_key, field_label in info_fields:
+    for field_key, field_label in [("Time","时间"),("Time_AD","公元"),("Location","地点"),("Price","价格"),("Subject","标的")]:
         val = data.get(field_key)
         if is_empty(val):
             continue
         val_str = str(val).strip()
-        if field_key == "Time_AD":
-            display_name = f"公元 {val_str} 年"
-        else:
-            display_name = f"{field_label}：{truncate(val_str)}"
-
-        info_id = nid(f"info_{field_key}")
+        display_name = f"公元{val_str}年" if field_key == "Time_AD" else f"{field_label}：{truncate(val_str)}"
         nodes.append({
-            "id": info_id,
-            "name": display_name,
-            "category": 4,
-            "symbolSize": 32,
-            "symbol": "roundRect",
+            "name": display_name, "category": 4, "symbolSize": 34, "symbol": "roundRect",
             "value": val_str,
-            "label": {
-                "show": True,
-                "position": "bottom",
-                "fontSize": 11,
-            },
+            "itemStyle": {"color": "#7c3aed", "borderColor": "#c4b5fd", "borderWidth": 1},
+            "label": {"show": True, "position": "bottom", "fontSize": 11, "color": "#5b21b6"},
+            "tooltip": {"formatter": f"<b>{field_label}</b><br/>{val_str}"},
         })
-        # 信息节点连接到地契中心，边不显示标签（节点名称已含信息类别）
         links.append({
-            "source": contract_id,
-            "target": info_id,
-            "value": "",
-            "label": {"show": False},
-            "lineStyle": {"type": "dashed", "width": 1.5, "opacity": 0.6},
+            "source": CONTRACT, "target": display_name,
+            "lineStyle": {"type": "dashed", "width": 1.5, "color": "#a78bfa", "opacity": 0.7},
         })
 
     return {
-        "type": "graph",
-        "layout": "force",
-        "categories": categories,
-        "data": nodes,
-        "links": links,
-        "roam": True,
+        "type": "graph", "layout": "force", "categories": categories,
+        "data": nodes, "links": links, "roam": True,
         "label": {"position": "bottom", "formatter": "{b}"},
-        "lineStyle": {"color": "source", "curveness": 0.15},
+        "lineStyle": {"curveness": 0.1},
     }
 
 def analyze_structured_result(structured_result_id: int, db: Session) -> None:
