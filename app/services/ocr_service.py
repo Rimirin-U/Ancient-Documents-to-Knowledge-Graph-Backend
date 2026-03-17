@@ -2,32 +2,15 @@
 import os
 import json
 import re
+import base64
 from sqlalchemy.orm import Session
 from database import SessionLocal, Image, OcrResult, OcrStatus
 from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
 
-# 尝试导入 PaddleOCRVL
-try:
-    from paddleocr import PaddleOCRVL
-    HAS_PADDLEOCR = True
-except Exception as e:
-    print(f"Warning: PaddleOCRVL import failed ({e}), using mock OCR.")
-    HAS_PADDLEOCR = False
-
-class MockPaddleOCRVL:
-    def predict(self, image_path):
-        # 返回模拟结果
-        class MockResult:
-            def __init__(self):
-                self.rec_texts = [
-                    "道光十二年二月初二日",
-                    "永卖田约人姪恒忠亲笔立约",
-                    "本约所涉田产共肆点捌分玖厘毫",
-                    "卖与叔父名下篋叙堂永远承买为业",
-                    "价银贰拾柒两整"
-                ]
-        return [MockResult()]
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
 
 def extract_text_content(json_file_path: str, text_save_path: str) -> bool:
     if not os.path.exists(json_file_path):
@@ -70,20 +53,48 @@ def extract_text_content(json_file_path: str, text_save_path: str) -> bool:
         return False
 
 
-def _run_paddle_predict(input_file: str):
-    """Run PaddleOCR prediction in a separate thread."""
-    if HAS_PADDLEOCR:
-        try:
-            pipeline = PaddleOCRVL()
-            return pipeline.predict(input_file)
-        except Exception as e:
-            print(f"PaddleOCRVL execution failed: {e}, falling back to mock")
-            pipeline = MockPaddleOCRVL()
-            return pipeline.predict(input_file)
-    else:
-        pipeline = MockPaddleOCRVL()
-        return pipeline.predict(input_file)
+def _run_api_predict(input_file: str):
+    """Run OCR prediction using DashScope Qwen-VL API."""
+    try:
+        from dashscope import MultiModalConversation
+        import dashscope
+        
+        dashscope.api_key = settings.DASHSCOPE_API_KEY
+        if not dashscope.api_key:
+             raise ValueError("DASHSCOPE_API_KEY is not set in environment variables.")
 
+        # Convert image to base64 or use local file URI depending on DashScope requirement
+        # Qwen-VL supports local file paths using file:// prefix
+        local_file_path = f"file://{os.path.abspath(input_file)}"
+
+        messages = [{
+            'role': 'user',
+            'content': [
+                {'image': local_file_path},
+                {'text': '请提取图片中的所有文字，按原本的排版顺序输出，不要包含任何解释性语言，只要原文。'}
+            ]
+        }]
+
+        response = MultiModalConversation.call(
+            model='qwen-vl-plus',
+            messages=messages
+        )
+        
+        if response.status_code == 200:
+             # Extract text from response
+             # Response format: response.output.choices[0].message.content[0]['text']
+             content_list = response.output.choices[0].message.content
+             for item in content_list:
+                 if 'text' in item:
+                     return item['text']
+             return ""
+        else:
+             print(f"DashScope API Error: {response.code} - {response.message}")
+             return f"Error: API Request failed with code {response.code}"
+
+    except Exception as e:
+        print(f"API OCR execution failed: {e}")
+        return f"Error: {str(e)}"
 
 async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
     """
@@ -122,20 +133,12 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
             db.commit()
             db.refresh(ocr_result)
 
-            # 执行 OCR 操作 (Async in threadpool)
-            output = await run_in_threadpool(_run_paddle_predict, input_file)
+            # 执行 OCR 操作 (Async in threadpool using DashScope API)
+            extracted_text = await run_in_threadpool(_run_api_predict, input_file)
 
-            extracted_text = ""
-            if output:
-                for res in output:
-                    # 从rec_texts字段提取文本
-                    if hasattr(res, 'rec_texts'):
-                        for text in res.rec_texts:
-                            if text:  # 跳过空文本
-                                extracted_text += text + "\n"
-            
-            if not extracted_text and not HAS_PADDLEOCR:
-                 extracted_text = "模拟OCR文本：道光十二年..."
+            if not extracted_text or extracted_text.startswith("Error:"):
+                 if not extracted_text:
+                     extracted_text = "模拟OCR文本：未能识别到文字。"
 
             # 清理文本
             cleaned_text = re.sub(r"\n{2,}", "\n", extracted_text)
