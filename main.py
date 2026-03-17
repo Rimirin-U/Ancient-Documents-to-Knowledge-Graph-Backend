@@ -1067,7 +1067,7 @@ async def get_multi_relation_graph(
     }
 
 # GET /api/v1/multi-tasks/{multi_task_id}/multi-relation-graphs - 获取指定MultiTask的MultiRelationGraph列表
-@multi_task_router.get("/{multi_task_id}/multi-relation-graphs")
+@multi_task_router_v2.get("/{multi_task_id}/multi-relation-graphs")
 async def get_multi_task_relation_graphs(
     multi_task_id: int,
     skip: int = 0,
