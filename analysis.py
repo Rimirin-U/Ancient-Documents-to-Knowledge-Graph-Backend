@@ -142,68 +142,122 @@ def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
 
 def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, Any]:
     """
-    基于结构化数据构建单文档关系图
+    基于结构化数据构建单文档关系图。
+    以"地契"为中心节点，辐射出人员节点（卖方/买方/中人）和关键信息节点（时间/地点/价格/标的）。
     """
     nodes = []
     links = []
-    categories = [{"name": "Seller"}, {"name": "Buyer"}, {"name": "Middleman"}, {"name": "Other"}]
-    
-    # 辅助函数：添加节点
-    def add_node(name, category, role):
-        if not name or name in ["未识别", "未知", ""]:
+    categories = [
+        {"name": "卖方"},
+        {"name": "买方"},
+        {"name": "中人"},
+        {"name": "契约"},
+        {"name": "信息"},
+    ]
+
+    def nid(suffix: str) -> str:
+        return f"{doc_id}_{suffix}"
+
+    def is_empty(val) -> bool:
+        return not val or str(val).strip() in ["未识别", "未知", "None", ""]
+
+    def truncate(val: str, max_len: int = 12) -> str:
+        s = str(val).strip()
+        return s[:max_len] + "…" if len(s) > max_len else s
+
+    # ── 中心：地契节点 ──────────────────────────────────────────────
+    contract_id = nid("contract")
+    nodes.append({
+        "id": contract_id,
+        "name": "地契",
+        "category": 3,
+        "symbolSize": 58,
+        "symbol": "diamond",
+        "value": "contract",
+        "label": {
+            "show": True,
+            "position": "inside",
+            "fontSize": 16,
+            "fontWeight": "bold",
+            "color": "#fff",
+        },
+    })
+
+    # ── 人员节点 ────────────────────────────────────────────────────
+    def add_person(field_key: str, category_idx: int, rel_label: str, direction: str):
+        val = data.get(field_key)
+        if is_empty(val):
             return
-        
-        # 检查节点是否已存在
-        for node in nodes:
-            if node["name"] == name:
-                return
-        
+        name = str(val).strip()
+        if any(n["name"] == name for n in nodes):
+            return
         nodes.append({
-            "id": f"{doc_id}_{name}", # 使用文档ID前缀防止冲突，或者在单图分析中直接用名字
+            "id": nid(name),
             "name": name,
-            "category": category,
-            "symbolSize": 20,
-            "value": 1,
-            "attributes": {
-                "role": role,
-                "doc_id": doc_id
-            }
+            "category": category_idx,
+            "symbolSize": 46,
+            "symbol": "circle",
+            "value": name,
+            "label": {
+                "show": True,
+                "position": "bottom",
+                "fontSize": 14,
+                "fontWeight": "bold",
+            },
+        })
+        src, tgt = (nid(name), contract_id) if direction == "to_contract" else (contract_id, nid(name))
+        links.append({
+            "source": src,
+            "target": tgt,
+            "value": rel_label,
+            "label": {"show": True, "formatter": rel_label, "fontSize": 11},
+            "lineStyle": {"width": 2.5},
         })
 
-    seller = data.get("Seller")
-    buyer = data.get("Buyer")
-    middleman = data.get("Middleman")
-    
-    if seller:
-        add_node(seller, 0, "Seller")
-    if buyer:
-        add_node(buyer, 1, "Buyer")
-    if middleman:
-        add_node(middleman, 2, "Middleman")
-        
-    # 添加边
-    if seller and buyer:
-        links.append({
-            "source": f"{doc_id}_{seller}",
-            "target": f"{doc_id}_{buyer}",
-            "value": "Trade",
-            "label": {"show": True, "formatter": "交易"}
+    add_person("Seller",    0, "卖出", "to_contract")
+    add_person("Buyer",     1, "买入", "from_contract")
+    add_person("Middleman", 2, "见证", "to_contract")
+
+    # ── 信息节点 ────────────────────────────────────────────────────
+    info_fields = [
+        ("Time",     "时间"),
+        ("Time_AD",  "公元"),
+        ("Location", "地点"),
+        ("Price",    "价格"),
+        ("Subject",  "标的"),
+    ]
+
+    for field_key, field_label in info_fields:
+        val = data.get(field_key)
+        if is_empty(val):
+            continue
+        val_str = str(val).strip()
+        if field_key == "Time_AD":
+            display_name = f"公元 {val_str} 年"
+        else:
+            display_name = f"{field_label}：{truncate(val_str)}"
+
+        info_id = nid(f"info_{field_key}")
+        nodes.append({
+            "id": info_id,
+            "name": display_name,
+            "category": 4,
+            "symbolSize": 32,
+            "symbol": "roundRect",
+            "value": val_str,
+            "label": {
+                "show": True,
+                "position": "bottom",
+                "fontSize": 11,
+            },
         })
-    
-    if middleman and seller:
+        # 信息节点连接到地契中心，边不显示标签（节点名称已含信息类别）
         links.append({
-            "source": f"{doc_id}_{middleman}",
-            "target": f"{doc_id}_{seller}",
-            "value": "Witness",
-            "label": {"show": True, "formatter": "见证"}
-        })
-        
-    if middleman and buyer:
-        links.append({
-            "source": f"{doc_id}_{middleman}",
-            "target": f"{doc_id}_{buyer}",
-            "value": "Witness",
-            "label": {"show": True, "formatter": "见证"}
+            "source": contract_id,
+            "target": info_id,
+            "value": "",
+            "label": {"show": False},
+            "lineStyle": {"type": "dashed", "width": 1.5, "opacity": 0.6},
         })
 
     return {
@@ -213,8 +267,8 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
         "data": nodes,
         "links": links,
         "roam": True,
-        "label": {"position": "right", "formatter": "{b}"},
-        "lineStyle": {"color": "source", "curveness": 0.3}
+        "label": {"position": "bottom", "formatter": "{b}"},
+        "lineStyle": {"color": "source", "curveness": 0.15},
     }
 
 def analyze_structured_result(structured_result_id: int, db: Session) -> None:
@@ -239,8 +293,8 @@ def analyze_structured_result(structured_result_id: int, db: Session) -> None:
         # 封装成ECharts格式
         echarts_option = {
             "title": {"text": "地契关系图"},
-            "tooltip": {},
-            "legend": [{"data": ["Seller", "Buyer", "Middleman", "Other"]}],
+            "tooltip": {"trigger": "item", "formatter": "{b}"},
+            "legend": [{"data": ["卖方", "买方", "中人", "契约", "信息"]}],
             "series": [graph_data]
         }
 
