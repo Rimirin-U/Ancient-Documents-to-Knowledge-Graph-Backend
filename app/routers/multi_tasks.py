@@ -43,7 +43,7 @@ def create_multi_task_from_images_endpoint(
     user_id: int = Depends(get_current_user_id)
 ):
     try:
-        structured_result_ids = find_latest_structured_results_for_images(db, request.image_ids)
+        structured_result_ids = find_latest_structured_results_for_images(db, request.image_ids, user_id=user_id)
         task = create_multi_task(db, user_id, structured_result_ids)
         return {
             "success": True,

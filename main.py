@@ -169,7 +169,7 @@ async def run_auto_image_pipeline(image_id: int) -> None:
         if not ocr_result:
             return
 
-        analyze_ocr_result(ocr_result.id, db)
+        await analyze_ocr_result(ocr_result.id, db)
 
         structured_result = (
             db.query(StructuredResult)
@@ -180,7 +180,7 @@ async def run_auto_image_pipeline(image_id: int) -> None:
         if not structured_result:
             return
 
-        analyze_structured_result(structured_result.id, db)
+        await analyze_structured_result(structured_result.id, db)
     except Exception as e:
         print(f"后台自动处理失败(image_id={image_id}): {str(e)}")
     finally:
@@ -1066,40 +1066,6 @@ async def get_multi_relation_graph(
         }
     }
 
-# GET /api/v1/multi-tasks/{multi_task_id}/multi-relation-graphs - 获取指定MultiTask的MultiRelationGraph列表
-@multi_task_router_v2.get("/{multi_task_id}/multi-relation-graphs")
-async def get_multi_task_relation_graphs(
-    multi_task_id: int,
-    skip: int = 0,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    """获取指定MultiTask的跨文档关系图列表"""
-    # 验证token
-    token = credentials.credentials
-    verify_token(token)
-    
-    # 验证MultiTask存在
-    multi_task = db.query(MultiTask).filter(MultiTask.id == multi_task_id).first()
-    if not multi_task:
-        raise HTTPException(status_code=404, detail="MultiTask不存在")
-    
-    # 查询跨文档关系图，分页返回id
-    relation_graphs = db.query(MultiRelationGraph.id).filter(MultiRelationGraph.multi_task_id == multi_task_id).offset(skip).limit(limit).all()
-    
-    # 获取总数
-    total = db.query(MultiRelationGraph).filter(MultiRelationGraph.multi_task_id == multi_task_id).count()
-    
-    return {
-        "success": True,
-        "data": {
-            "total": total,
-            "skip": skip,
-            "limit": limit,
-            "ids": [graph[0] for graph in relation_graphs]
-        }
-    } 
 
 # 智能问答路由
 

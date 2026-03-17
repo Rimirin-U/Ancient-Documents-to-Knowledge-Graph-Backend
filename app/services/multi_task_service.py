@@ -17,12 +17,16 @@ def get_multi_task(db: Session, multi_task_id: int) -> Optional[MultiTask]:
     return db.query(MultiTask).filter(MultiTask.id == multi_task_id).first()
 
 def create_multi_task(db: Session, user_id: int, structured_result_ids: List[int]) -> MultiTask:
-    # Verify all StructuredResults exist
-    # In a real app, we should also verify ownership here if needed
     for sr_id in structured_result_ids:
         sr = db.query(StructuredResult).filter(StructuredResult.id == sr_id).first()
         if not sr:
             raise ResourceNotFoundError(f"StructuredResult {sr_id} not found")
+        ocr = db.query(OcrResult).filter(OcrResult.id == sr.ocr_result_id).first()
+        if not ocr:
+            raise ResourceNotFoundError(f"OcrResult for StructuredResult {sr_id} not found")
+        image = db.query(Image).filter(Image.id == ocr.image_id).first()
+        if not image or image.user_id != user_id:
+            raise PermissionDeniedError(f"StructuredResult {sr_id} does not belong to the current user")
 
     try:
         multi_task = MultiTask(
@@ -75,12 +79,14 @@ def delete_multi_task(db: Session, multi_task_id: int, user_id: int) -> dict:
         "multi_task_associations": deleted_association_count
     }
 
-def find_latest_structured_results_for_images(db: Session, image_ids: List[int]) -> List[int]:
+def find_latest_structured_results_for_images(db: Session, image_ids: List[int], user_id: Optional[int] = None) -> List[int]:
     structured_result_ids = []
     for image_id in image_ids:
         image = db.query(Image).filter(Image.id == image_id).first()
         if not image:
             raise ResourceNotFoundError(f"Image {image_id} not found")
+        if user_id is not None and image.user_id != user_id:
+            raise PermissionDeniedError(f"Image {image_id} does not belong to the current user")
         
         latest_ocr = (
             db.query(OcrResult)

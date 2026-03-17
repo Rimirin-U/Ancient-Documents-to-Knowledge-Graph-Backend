@@ -86,7 +86,7 @@ class EntityResolver:
                 
                 score = EntityResolver.calculate_similarity(node_attrs, rep_attrs)
                 
-                if score > 0.7 and score > best_score:
+                if score >= 0.5 and score > best_score:
                     best_score = score
                     best_match_idx = idx
                     matched = True
