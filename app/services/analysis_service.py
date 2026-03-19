@@ -69,28 +69,56 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         db.commit()
         print(f"Structured analysis for {ocr_result_id} completed.")
 
-        # ④ 写入 ChromaDB 向量索引，供 RAG 检索
+        # ④ 用富文本覆盖 ChromaDB 向量索引
+        # doc_id 与 OCR 阶段一致（ocr_{id}），upsert 覆盖基础版，补充结构化元数据
+        # 富文本 = OCR 原文 + 结构化字段摘要，使"找买方是张三的契约"等语义查询更准确
         try:
             from app.services.rag_service import _get_text_embeddings_sync
             from app.services.vector_store.chroma import upsert_document
-            embedding = _get_text_embeddings_sync(ocr_result.raw_text)
+
+            _EMPTY = {"未识别", "未记载", "None", "null", ""}
+
+            def _field(key: str) -> str:
+                v = str(structured_data.get(key, "")).strip()
+                return v if v not in _EMPTY else ""
+
+            parts = [ocr_result.raw_text]
+            fields = [
+                ("时间",   _field("Time")),
+                ("地点",   _field("Location")),
+                ("卖方",   _field("Seller")),
+                ("买方",   _field("Buyer")),
+                ("中人",   _field("Middleman")),
+                ("价格",   _field("Price")),
+                ("标的",   _field("Subject")),
+            ]
+            filled = [f"【{k}】{v}" for k, v in fields if v]
+            if filled:
+                parts.append("\n" + "　".join(filled))
+            rich_text = "\n".join(parts)
+
+            embedding = _get_text_embeddings_sync(rich_text)
             metadata = {
                 "structured_result_id": structured_result.id,
                 "ocr_result_id": ocr_result.id,
                 "image_id": ocr_result.image_id,
                 "filename": structured_data.get("filename", ""),
-                "time": structured_data.get("Time", ""),
-                "location": structured_data.get("Location", ""),
+                "time": _field("Time"),
+                "location": _field("Location"),
+                "seller": _field("Seller"),
+                "buyer": _field("Buyer"),
+                "price": _field("Price"),
+                "subject": _field("Subject"),
             }
             upsert_document(
-                doc_id=f"sr_{structured_result.id}",
-                text=ocr_result.raw_text,
+                doc_id=f"ocr_{ocr_result.id}",
+                text=rich_text,
                 embedding=embedding,
                 metadata=metadata,
             )
-            print(f"Document sr_{structured_result.id} indexed to ChromaDB.")
+            print(f"Document ocr_{ocr_result.id} re-indexed with structured enrichment.")
         except Exception as idx_err:
-            print(f"ChromaDB indexing failed (non-fatal): {idx_err}")
+            print(f"ChromaDB enrichment indexing failed (non-fatal): {idx_err}")
 
     except Exception as e:
         print(f"Error analyzing OCR result {ocr_result_id}: {e}")

@@ -1,11 +1,13 @@
 """
-RAG 问答服务（含引用溯源）
+RAG 问答服务（含引用溯源、多轮对话、相关性过滤）
 
 流程：
   1. 问题向量化（DashScope TextEmbedding）
-  2. ChromaDB 向量检索 top-3 相关文档（含元数据）
-  3. DashScope Qwen-Turbo 生成回答
-  4. 返回 answer + sources（每条含 doc_id / filename / excerpt / image_id）
+  2. ChromaDB 向量检索 top-5（含相关性距离阈值过滤）
+  3. 格式化检索结果为带编号的参考上下文
+  4. 拼入近期对话历史（多轮对话支持）
+  5. DashScope Qwen-Plus 生成回答
+  6. 返回 answer + sources（每条含 doc_id / filename / 结构化字段 / 摘要）
 """
 import json
 import os
@@ -49,54 +51,96 @@ async def get_text_embeddings(text: str) -> list:
 
 # ── 检索 ──────────────────────────────────────────────────────
 
-async def retrieve_context(question_vec: list, top_k: int = 3) -> list[dict]:
+# 相关性距离阈值（ChromaDB 默认距离算法 L2，值越小越相似）
+# > 1.8 的结果视为不相关，不纳入上下文，避免"无关资料污染答案"
+_RELEVANCE_THRESHOLD = 1.8
+
+
+async def retrieve_context(question_vec: list, top_k: int = 5) -> list[dict]:
     """
-    使用 ChromaDB 进行向量检索。
+    使用 ChromaDB 进行向量检索，并过滤距离超过阈值的不相关结果。
     返回列表，每条含 text / metadata / distance。
     """
     from app.services.vector_store.chroma import query_documents
-    return await run_in_threadpool(query_documents, question_vec, top_k)
+    results = await run_in_threadpool(query_documents, question_vec, top_k)
+    # 过滤低相关性结果
+    filtered = [r for r in results if r.get("distance", 0) <= _RELEVANCE_THRESHOLD]
+    return filtered if filtered else results[:2]  # 至少保留 2 条兜底
 
 
 # ── 生成回答 ──────────────────────────────────────────────────
 
-def _generate_answer_sync(question: str, context_items: list[dict]) -> str:
+def _format_context(context_items: list[dict]) -> str:
+    """将检索结果格式化为带编号的参考上下文，包含结构化元数据标注。"""
+    parts = []
+    for i, item in enumerate(context_items):
+        meta = item.get("metadata", {})
+        text = item.get("text", "")
+        # 收集有意义的元数据标注
+        tags = []
+        for key, label in [("time", "时间"), ("location", "地点"),
+                            ("seller", "卖方"), ("buyer", "买方"),
+                            ("price", "价格"), ("subject", "标的")]:
+            v = str(meta.get(key, "")).strip()
+            if v and v not in {"未识别", "未记载", "None", "null", ""}:
+                tags.append(f"{label}：{v}")
+        tag_str = "　".join(tags)
+        header = f"[参考{i+1}]" + (f" （{tag_str}）" if tag_str else "")
+        # 截取前 400 字，避免 token 过多
+        excerpt = text[:400] + ("..." if len(text) > 400 else "")
+        parts.append(f"{header}\n{excerpt}")
+    return "\n\n".join(parts)
+
+
+def _generate_answer_sync(
+    question: str,
+    context_items: list[dict],
+    history: list[dict] | None = None,
+) -> str:
     if not settings.DASHSCOPE_API_KEY:
         return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。"
 
-    if not context_items:
-        context_hint = "（知识库中暂无相关文档，将根据通用知识作答）"
-        context_str = ""
-    else:
-        context_hint = ""
-        context_str = "\n".join(
-            [f"- [{i+1}] {item['text']}" for i, item in enumerate(context_items)]
-        )
+    system_msg = {
+        "role": "system",
+        "content": (
+            "你是一位专研中国古代契约文书的智能问答助手。"
+            "知识库中存储了若干份经过 OCR 识别和结构化分析的地契文书。\n\n"
+            "回答规则：\n"
+            "1. 优先依据提供的参考文书作答，引用时用 [参考N] 标注来源编号\n"
+            "2. 若参考资料中有明确信息，直接引用原文关键词，不要过度解读\n"
+            "3. 若参考资料不足以回答，如实说明"知识库中暂无相关记录"\n"
+            "4. 回答简洁专业，避免重复引述大段原文\n"
+            "5. 涉及人名、地名、金额时保持原文写法"
+        ),
+    }
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个专业的古籍研究助手。请根据提供的参考资料回答用户问题，"
-                "回答时标注引用来源编号如 [1]、[2] 等。"
-                "如果参考资料为空或没有相关内容，请依据通用知识作答，并如实说明。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"{context_hint}"
-                + (f"\n参考资料：\n{context_str}\n\n" if context_str else "\n")
-                + f"问题：{question}"
-            ),
-        },
-    ]
+    messages: list[dict] = [system_msg]
+
+    # 拼入近期对话历史（最多 4 轮，避免 token 过多）
+    if history:
+        for turn in history[-8:]:
+            role = turn.get("role", "user")
+            content = turn.get("content", "")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+
+    # 构建当前问题的 user 消息
+    if context_items:
+        context_str = _format_context(context_items)
+        user_content = f"【参考文书】\n{context_str}\n\n【问题】{question}"
+    else:
+        user_content = (
+            f"【说明】知识库中暂未检索到与此问题直接相关的文书，"
+            f"请根据通用古代契约文书知识作答。\n\n【问题】{question}"
+        )
+    messages.append({"role": "user", "content": user_content})
 
     try:
         response = dashscope.Generation.call(
-            model="qwen-turbo",
+            model="qwen-plus",
             messages=messages,
             result_format="message",
+            max_tokens=1024,
         )
         if response.status_code == 200:
             try:
@@ -110,8 +154,12 @@ def _generate_answer_sync(question: str, context_items: list[dict]) -> str:
         return "生成过程发生错误，请稍后再试。"
 
 
-async def generate_answer(question: str, context_items: list[dict]) -> str:
-    return await run_in_threadpool(_generate_answer_sync, question, context_items)
+async def generate_answer(
+    question: str,
+    context_items: list[dict],
+    history: list[dict] | None = None,
+) -> str:
+    return await run_in_threadpool(_generate_answer_sync, question, context_items, history)
 
 
 # ── 文件名清洗工具 ────────────────────────────────────────────
@@ -137,7 +185,11 @@ def _friendly_filename(raw_filename: str, image_id) -> str:
 
 # ── RAG 主流程 ────────────────────────────────────────────────
 
-async def rag_pipeline(question: str, db: Session) -> dict:
+async def rag_pipeline(
+    question: str,
+    db: Session,
+    history: list[dict] | None = None,
+) -> dict:
     """
     RAG 主流程。
     返回：
@@ -160,7 +212,7 @@ async def rag_pipeline(question: str, db: Session) -> dict:
     try:
         q_vec = await get_text_embeddings(question)
         context_items = await retrieve_context(q_vec)
-        answer = await generate_answer(question, context_items)
+        answer = await generate_answer(question, context_items, history)
     except Exception as e:
         logger.error("rag_pipeline_error", extra={"error": str(e)})
         answer = "抱歉，处理您的问题时出现了意外错误，请稍后再试。"
@@ -169,19 +221,26 @@ async def rag_pipeline(question: str, db: Session) -> dict:
     sources = []
     for i, item in enumerate(context_items):
         meta = item.get("metadata", {})
-        text = item.get("text", "")
+        # 取 OCR 原文部分（富文本第一段，换行前）作为摘要展示
+        full_text = item.get("text", "")
+        ocr_only = full_text.split("\n【时间】")[0].split("\n【卖方】")[0]
+        excerpt = ocr_only[:80].strip() + ("..." if len(ocr_only) > 80 else "")
         image_id = meta.get("image_id", "")
         raw_filename = meta.get("filename", "")
         display_filename = _friendly_filename(raw_filename, image_id)
         sources.append(
             {
                 "index": i + 1,
-                "doc_id": meta.get("structured_result_id", ""),
+                "doc_id": meta.get("structured_result_id", meta.get("ocr_result_id", "")),
                 "image_id": image_id,
                 "filename": display_filename,
                 "time": meta.get("time", ""),
                 "location": meta.get("location", ""),
-                "excerpt": text[:60] + ("..." if len(text) > 60 else ""),
+                "seller": meta.get("seller", ""),
+                "buyer": meta.get("buyer", ""),
+                "price": meta.get("price", ""),
+                "subject": meta.get("subject", ""),
+                "excerpt": excerpt,
             }
         )
 

@@ -255,6 +255,11 @@ def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
             ocr_result.status = OcrStatus.DONE
             db.commit()
 
+            # ⑤ 立即写入 ChromaDB 向量索引
+            # 使用 ocr_{id} 作为 doc_id，后续结构化完成后会 upsert 覆盖（丰富元数据）
+            # 这样保证所有 OCR 完成的图片都能被智能问答检索到
+            _index_ocr_to_chroma(ocr_result.id, cleaned_text, image)
+
             return True
 
         except Exception as e:
@@ -275,6 +280,35 @@ def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
     finally:
         if close_db:
             db.close()
+
+
+def _index_ocr_to_chroma(ocr_result_id: int, text: str, image) -> None:
+    """
+    将 OCR 文本写入 ChromaDB 向量索引（基础版，无结构化元数据）。
+    doc_id = ocr_{ocr_result_id}，后续结构化完成后会覆盖更新。
+    """
+    try:
+        from app.services.rag_service import _get_text_embeddings_sync
+        from app.services.vector_store.chroma import upsert_document
+        embedding = _get_text_embeddings_sync(text)
+        metadata = {
+            "ocr_result_id": ocr_result_id,
+            "image_id": image.id if image else 0,
+            "filename": image.filename if image else "",
+            # 结构化字段留空，等结构化分析完成后更新
+            "structured_result_id": "",
+            "time": "",
+            "location": "",
+        }
+        upsert_document(
+            doc_id=f"ocr_{ocr_result_id}",
+            text=text,
+            embedding=embedding,
+            metadata=metadata,
+        )
+        print(f"OCR result {ocr_result_id} indexed to ChromaDB (basic).")
+    except Exception as e:
+        print(f"ChromaDB OCR indexing failed (non-fatal): {e}")
 
 
 async def ocr_image_by_id_async(image_id: int, db: Session = None) -> bool:
