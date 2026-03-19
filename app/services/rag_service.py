@@ -49,18 +49,27 @@ async def retrieve_context(question_vec, db: Session, top_k=3):
     """
     使用 ChromaDB 进行向量检索
     """
-    collection = get_collection()
-    
-    # 查询向量数据库
-    results = collection.query(
-        query_embeddings=[question_vec],
-        n_results=top_k
-    )
-    
-    if results['documents'] and results['documents'][0]:
-        return results['documents'][0]
-    
-    # Fallback if no results in vector db (e.g. first run)
+    try:
+        collection = get_collection()
+
+        # 集合为空时直接返回，避免 ChromaDB 抛异常
+        count = collection.count()
+        if count == 0:
+            return []
+
+        # n_results 不能超过集合中实际文档数
+        actual_top_k = min(top_k, count)
+
+        results = collection.query(
+            query_embeddings=[question_vec],
+            n_results=actual_top_k
+        )
+
+        if results['documents'] and results['documents'][0]:
+            return results['documents'][0]
+    except Exception as e:
+        print(f"ChromaDB retrieve error: {e}")
+
     return []
 
 def index_document(doc_id: str, text: str, embedding: list):
@@ -78,49 +87,70 @@ def index_document(doc_id: str, text: str, embedding: list):
 def _generate_answer_sync(question: str, context_list: list):
     """调用 LLM 生成回答 (Sync)"""
     if not settings.DASHSCOPE_API_KEY:
-        return "由于未配置 DASHSCOPE_API_KEY，无法生成智能回答。这里是模拟回复。"
-        
-    context_str = "\n".join([f"- {c}" for c in context_list])
-    
-    prompt = f"""
-    你是一个专业的古籍研究助手。请根据以下参考资料回答用户的问题。
-    如果参考资料中没有相关信息，请如实告知。
-    
-    参考资料：
-    {context_str}
-    
-    用户问题：{question}
-    
-    回答：
-    """
-    
+        return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。请联系管理员配置 API Key。"
+
+    if not context_list:
+        context_hint = "（知识库中暂无相关文档，将根据通用知识作答）"
+        context_str = ""
+    else:
+        context_hint = ""
+        context_str = "\n".join([f"- {c}" for c in context_list])
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一个专业的古籍研究助手。请根据提供的参考资料回答用户问题。"
+                "如果参考资料为空或没有相关内容，请依据通用知识作答，并如实说明。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"{context_hint}"
+                + (f"\n参考资料：\n{context_str}\n\n" if context_str else "\n")
+                + f"问题：{question}"
+            ),
+        },
+    ]
+
     try:
         response = dashscope.Generation.call(
             model=dashscope.Generation.Models.qwen_turbo,
-            prompt=prompt,
+            messages=messages,
             result_format='message'
         )
         if response.status_code == 200:
-            return response.output.choices[0].message.content
+            choices = response.output.get('choices') or []
+            if choices:
+                return choices[0]['message']['content']
+            return "模型未返回有效内容，请稍后重试。"
         else:
-            return "生成回答失败，请稍后再试。"
+            print(f"LLM generation failed: {response.code} - {response.message}")
+            return f"生成回答失败（{response.code}），请稍后再试。"
     except Exception as e:
-        return f"生成过程发生错误: {str(e)}"
+        print(f"LLM generation error: {e}")
+        return f"生成过程发生错误，请稍后再试。"
 
 async def generate_answer(question: str, context_list: list):
     return await run_in_threadpool(_generate_answer_sync, question, context_list)
 
 async def rag_pipeline(question: str, db: Session):
     """RAG 主流程"""
-    # 1. 问题向量化
-    q_vec = await get_text_embeddings(question)
-    
-    # 2. 检索相关文档
-    context = await retrieve_context(q_vec, db)
-    
-    # 3. 生成回答
-    answer = await generate_answer(question, context)
-    
+    try:
+        # 1. 问题向量化
+        q_vec = await get_text_embeddings(question)
+
+        # 2. 检索相关文档（空库或异常时返回空列表，不中断流程）
+        context = await retrieve_context(q_vec, db)
+
+        # 3. 生成回答
+        answer = await generate_answer(question, context)
+    except Exception as e:
+        print(f"RAG pipeline unexpected error: {e}")
+        answer = "抱歉，处理您的问题时出现了意外错误，请稍后再试。"
+        context = []
+
     return {
         "answer": answer,
         "sources": context
