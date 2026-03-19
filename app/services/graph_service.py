@@ -143,18 +143,18 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
     add_persons("Buyer",     1, "归属", False)
     add_persons("Middleman", 2, "见证", True)
 
-    # ── 卖方 → 买方 直接交易连线（核心交易关系可视化）──────────
+    # ── 卖方 → 买方 直接交易连线（核心买卖关系）─────────────────
+    # 只标注"出售"，不嵌入价格（价格已有独立节点，避免重复）
     sellers = _split_names(str(data.get("Seller", ""))) if not is_empty(data.get("Seller")) else []
     buyers  = _split_names(str(data.get("Buyer",  ""))) if not is_empty(data.get("Buyer"))  else []
     if sellers and buyers:
-        tx_label = "出售" + (f"（{truncate(ctx_price)}）" if ctx_price and not is_empty(ctx_price) else "")
         for seller_name in sellers:
             for buyer_name in buyers:
                 links.append({
                     "source": seller_name,
                     "target": buyer_name,
-                    "value": tx_label,
-                    "label": {"show": True, "formatter": tx_label, "fontSize": 10},
+                    "value": "出售",
+                    "label": {"show": True, "formatter": "出售", "fontSize": 10},
                     "lineStyle": {
                         "width": 1.5,
                         "type": "dashed",
@@ -164,38 +164,50 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
                 })
 
     # ── 信息节点（时间/地点/价格/标的）────────────────────────
-    # 每个字段用不同符号和颜色，便于视觉区分
+    # 设计原则：
+    #   • node.name  = 内部唯一标识符（不对用户显示），供连线 source/target 匹配
+    #   • node.value = 展示用的截断值（通过 label.formatter="{c}" 显示）
+    #   • 连线无标签（节点本身的值 + 符号形状 + 图例颜色已足够区分类型）
+    #   • 悬停 tooltip 显示字段类型 + 完整原始值
     INFO_FIELDS = [
-        ("Time",     "时间", "pin",       "#0891b2", "#a5f3fc"),
+        ("Time",     "时间", "pin",       "#0891b2", "#bae6fd"),
         ("Location", "地点", "pin",       "#0d9488", "#99f6e4"),
         ("Price",    "价格", "rect",      "#7c3aed", "#ddd6fe"),
         ("Subject",  "标的", "roundRect", "#b45309", "#fde68a"),
     ]
-    for field_key, field_label, symbol, color, border_color in INFO_FIELDS:
+    for idx, (field_key, field_label, symbol, color, border_color) in enumerate(INFO_FIELDS):
         val = data.get(field_key)
         if is_empty(val):
             continue
         val_str = str(val).strip()
-        display_name = f"{field_label}：{truncate(val_str)}"
+        # 唯一内部 ID（不显示给用户）
+        node_id = f"__info_{field_key}_{idx}"
+        # 展示文字：截断到合适长度
+        display_val = truncate(val_str, 10)
+        # pin 符号指针向下，标签放右侧避免重叠；其他放下方
+        label_pos = "right" if symbol == "pin" else "bottom"
         nodes.append({
-            "name": display_name,
+            "name": node_id,
             "category": 4,
-            "symbolSize": 32,
+            "symbolSize": 34,
             "symbol": symbol,
-            "value": val_str,
+            "value": display_val,
             "itemStyle": {"color": color, "borderColor": border_color, "borderWidth": 1.5},
             "label": {
                 "show": True,
-                "position": "bottom",
+                "position": label_pos,
+                "formatter": "{c}",
                 "fontSize": 11,
                 "color": color,
             },
+            "tooltip": {"formatter": f"<b>{field_label}</b><br/>{val_str}"},
             "properties": {field_label: val_str},
         })
+        # 连线不设 label（减少视觉噪音）
         links.append({
             "source": CONTRACT,
-            "target": display_name,
-            "lineStyle": {"type": "dashed", "width": 1.2, "color": color, "opacity": 0.6},
+            "target": node_id,
+            "lineStyle": {"type": "dashed", "width": 1.2, "color": color, "opacity": 0.65},
         })
 
     return {
