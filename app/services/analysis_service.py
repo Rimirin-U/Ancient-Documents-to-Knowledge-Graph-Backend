@@ -120,7 +120,16 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         db.add(structured_result)
         db.commit()
         print(f"Structured analysis for {ocr_result_id} completed.")
-        
+
+        # 将 OCR 原文自动索引到 ChromaDB，供 RAG 问答检索
+        try:
+            from app.services.rag_service import index_document, _get_text_embeddings_sync
+            embedding = _get_text_embeddings_sync(ocr_result.raw_text)
+            index_document(f"sr_{structured_result.id}", ocr_result.raw_text, embedding)
+            print(f"Document sr_{structured_result.id} indexed to ChromaDB.")
+        except Exception as idx_err:
+            print(f"ChromaDB indexing failed (non-fatal): {idx_err}")
+
     except Exception as e:
         print(f"Error analyzing OCR result {ocr_result_id}: {str(e)}")
         structured_result = StructuredResult(

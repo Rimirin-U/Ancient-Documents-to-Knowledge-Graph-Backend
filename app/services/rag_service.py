@@ -65,10 +65,10 @@ async def retrieve_context(question_vec, db: Session, top_k=3):
 
 def index_document(doc_id: str, text: str, embedding: list):
     """
-    将文档索引到 ChromaDB
+    将文档索引到 ChromaDB（upsert 避免重复 ID 报错）
     """
     collection = get_collection()
-    collection.add(
+    collection.upsert(
         documents=[text],
         embeddings=[embedding],
         ids=[doc_id]
