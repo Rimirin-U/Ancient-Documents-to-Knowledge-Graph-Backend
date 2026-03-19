@@ -116,21 +116,22 @@ def _generate_answer_sync(question: str, context_list: list):
 
     try:
         response = dashscope.Generation.call(
-            model=dashscope.Generation.Models.qwen_turbo,
+            model="qwen-turbo",
             messages=messages,
             result_format='message'
         )
         if response.status_code == 200:
-            choices = response.output.get('choices') or []
-            if choices:
-                return choices[0]['message']['content']
-            return "模型未返回有效内容，请稍后重试。"
+            # 兼容属性访问和字典访问两种 dashscope 版本
+            try:
+                return response.output.choices[0].message.content
+            except (AttributeError, IndexError, TypeError):
+                return response.output['choices'][0]['message']['content']
         else:
             print(f"LLM generation failed: {response.code} - {response.message}")
             return f"生成回答失败（{response.code}），请稍后再试。"
     except Exception as e:
         print(f"LLM generation error: {e}")
-        return f"生成过程发生错误，请稍后再试。"
+        return "生成过程发生错误，请稍后再试。"
 
 async def generate_answer(question: str, context_list: list):
     return await run_in_threadpool(_generate_answer_sync, question, context_list)
