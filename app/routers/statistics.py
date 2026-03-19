@@ -37,7 +37,11 @@ def _parse_structured_results(db: Session, user_id: int) -> List[Dict[str, Any]]
     return results
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="获取数据统计看板",
+    description="聚合当前用户所有已分析文书的统计数据：文书总数、分析完成数、时间年代分布、地点TOP10、高频人物TOP10、历史地价趋势",
+)
 async def get_statistics(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),

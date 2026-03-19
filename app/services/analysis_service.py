@@ -1,4 +1,8 @@
-
+"""
+分析服务编排层
+负责将 OCR 结果 → 结构化提取 → 关系图生成 → 跨文档分析的完整流水线进行编排。
+底层 LLM 调用委托给 llm_client.py，图谱构建委托给 graph_service.py。
+"""
 import json
 import os
 import re
@@ -10,80 +14,20 @@ from app.core.config import settings
 from fastapi.concurrency import run_in_threadpool
 
 from database import (
-    StructuredResult, RelationGraph, MultiTask, MultiRelationGraph, 
+    StructuredResult, RelationGraph, MultiTask, MultiRelationGraph,
     OcrResult, OcrStatus, MultiTaskStructuredResult, get_beijing_time
 )
 
-# 尝试导入 dashscope，如果不存在则使用模拟
-try:
-    import dashscope
-    from dashscope import Generation
-    if settings.DASHSCOPE_API_KEY:
-        dashscope.api_key = settings.DASHSCOPE_API_KEY
-    HAS_DASHSCOPE = True
-except ImportError:
-    HAS_DASHSCOPE = False
-
-def _call_llm_sync(text: str) -> Dict[str, Any]:
-    """
-    调用LLM进行结构化提取 (Sync)
-    """
-    if HAS_DASHSCOPE and settings.DASHSCOPE_API_KEY:
-        prompt = f"""
-        你是一个专业的古籍文档分析专家。请分析以下地契文档的OCR识别结果，提取关键信息并以JSON格式返回。
-        
-        需要提取的字段如下：
-        - Time: 契约签订时间（原文）
-        - Time_AD: 契约签订时间（公元纪年，整数年份，如1832）
-        - Location: 土地/房产位置
-        - Seller: 卖方姓名
-        - Buyer: 买方姓名
-        - Middleman: 中人/见证人姓名
-        - Price: 交易价格（包含单位）
-        - Subject: 交易标的物（如田地面积、房屋等）
-        - Translation: 文档的现代文翻译
-        
-        OCR文本内容：
-        {text}
-        
-        请仅返回JSON字符串，不要包含markdown标记或其他无关内容。
-        """
-        
-        try:
-            response = Generation.call(
-                model=Generation.Models.qwen_turbo,
-                prompt=prompt,
-                result_format='message'
-            )
-            
-            if response.status_code == 200:
-                content = response.output.choices[0].message.content
-                # 清理markdown标记
-                content = re.sub(r'^```json\s*', '', content)
-                content = re.sub(r'\s*```$', '', content)
-                return json.loads(content)
-            else:
-                print(f"LLM调用失败: {response.code} - {response.message}")
-                # Fallback to mock
-        except Exception as e:
-            print(f"LLM调用异常: {e}")
-            # Fallback to mock
-
-    # 模拟数据提取逻辑
-    return {
-        "Time": "未识别",
-        "Time_AD": None,
-        "Location": "未识别",
-        "Seller": "未识别",
-        "Buyer": "未识别",
-        "Middleman": "未识别",
-        "Price": "未识别",
-        "Subject": "未识别",
-        "Translation": "由于未配置有效的LLM API Key，无法生成翻译和精确提取。请配置DASHSCOPE_API_KEY环境变量。"
-    }
-
-async def call_llm_for_structure(text: str) -> Dict[str, Any]:
-    return await run_in_threadpool(_call_llm_sync, text)
+# 从新拆分的子模块导入
+from app.services.llm_client import (
+    call_structure_llm as call_llm_for_structure,
+    call_insights_llm as call_llm_for_insights,
+    HAS_DASHSCOPE,
+)
+from app.services.graph_service import (
+    build_graph_from_structure,
+    analyze_structured_result,
+)
 
 async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
     """
@@ -156,315 +100,7 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         db.commit()
 
 
-def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, Any]:
-    """
-    基于结构化数据构建单文档关系图。
-    以"地契"为中心节点，辐射出人员节点（卖方/买方/中人）和关键信息节点（时间/地点/价格/标的）。
-
-    注意：节点不设 id 字段，连线 source/target 直接使用节点 name，
-    确保 ECharts 按 name 匹配端点（设置 id 时 ECharts 优先用 id 匹配会导致连线断开）。
-    """
-    nodes = []
-    links = []
-    categories = [
-        {"name": "卖方"},
-        {"name": "买方"},
-        {"name": "中人"},
-        {"name": "契约"},
-        {"name": "信息"},
-    ]
-
-    def is_empty(val) -> bool:
-        return not val or str(val).strip() in ["未识别", "未知", "None", ""]
-
-    def truncate(val: str, max_len: int = 10) -> str:
-        s = str(val).strip()
-        return s[:max_len] + "…" if len(s) > max_len else s
-
-    # ── 中心：地契节点 ──────────────────────────────────────────────
-    CONTRACT = "地契"
-    nodes.append({
-        "name": CONTRACT,
-        "category": 3,
-        "symbolSize": 62,
-        "symbol": "diamond",
-        "value": "地契",
-        "itemStyle": {"color": "#d97706", "borderColor": "#fbbf24", "borderWidth": 2},
-        "label": {
-            "show": True,
-            "position": "inside",
-            "fontSize": 16,
-            "fontWeight": "bold",
-            "color": "#fff",
-        },
-    })
-
-    # ── 人员节点 ────────────────────────────────────────────────────
-    ROLE_COLORS = {0: "#dc2626", 1: "#2563eb", 2: "#059669"}
-
-    def add_person(field_key: str, category_idx: int, rel_label: str, to_contract: bool):
-        val = data.get(field_key)
-        if is_empty(val):
-            return
-        name = str(val).strip()
-        if any(n["name"] == name for n in nodes):
-            return
-        nodes.append({
-            "name": name,
-            "category": category_idx,
-            "symbolSize": 48,
-            "symbol": "circle",
-            "value": name,
-            "itemStyle": {
-                "color": ROLE_COLORS[category_idx],
-                "borderColor": "#fff",
-                "borderWidth": 2,
-            },
-            "label": {
-                "show": True,
-                "position": "bottom",
-                "fontSize": 13,
-                "fontWeight": "bold",
-                "color": ROLE_COLORS[category_idx],
-            },
-        })
-        src, tgt = (name, CONTRACT) if to_contract else (CONTRACT, name)
-        links.append({
-            "source": src,
-            "target": tgt,
-            "value": rel_label,
-            "label": {"show": True, "formatter": rel_label, "fontSize": 11, "fontWeight": "bold"},
-            "lineStyle": {"width": 2.5, "color": ROLE_COLORS[category_idx]},
-        })
-
-    add_person("Seller",    0, "卖出", True)
-    add_person("Buyer",     1, "买入", False)
-    add_person("Middleman", 2, "见证", True)
-
-    # ── 信息节点 ────────────────────────────────────────────────────
-    info_fields = [
-        ("Time",     "时间"),
-        ("Time_AD",  "公元"),
-        ("Location", "地点"),
-        ("Price",    "价格"),
-        ("Subject",  "标的"),
-    ]
-
-    for field_key, field_label in info_fields:
-        val = data.get(field_key)
-        if is_empty(val):
-            continue
-        val_str = str(val).strip()
-        display_name = f"公元{val_str}年" if field_key == "Time_AD" else f"{field_label}：{truncate(val_str)}"
-
-        nodes.append({
-            "name": display_name,
-            "category": 4,
-            "symbolSize": 34,
-            "symbol": "roundRect",
-            "value": val_str,           # 完整原文，悬停 tooltip 中显示
-            "itemStyle": {"color": "#7c3aed", "borderColor": "#c4b5fd", "borderWidth": 1},
-            "label": {
-                "show": True,
-                "position": "bottom",
-                "fontSize": 11,
-                "color": "#5b21b6",
-            },
-            "tooltip": {"formatter": f"<b>{field_label}</b><br/>{val_str}"},
-        })
-        # 信息节点与地契之间用虚线连接，不显示边标签
-        links.append({
-            "source": CONTRACT,
-            "target": display_name,
-            "lineStyle": {"type": "dashed", "width": 1.5, "color": "#a78bfa", "opacity": 0.7},
-        })
-
-    return {
-        "type": "graph",
-        "layout": "force",
-        "categories": categories,
-        "data": nodes,
-        "links": links,
-        "roam": True,
-        "label": {"position": "bottom", "formatter": "{b}"},
-        "lineStyle": {"curveness": 0.1},
-    }
-
-async def analyze_structured_result(structured_result_id: int, db: Session) -> None:
-    """
-    对StructuredResult进行关系图分析
-    """
-    try:
-        # 获取StructuredResult
-        structured_result = db.query(StructuredResult).filter(StructuredResult.id == structured_result_id).first()
-        if not structured_result:
-            return
-        
-        try:
-            data = json.loads(structured_result.content)
-        except json.JSONDecodeError:
-            print(f"Invalid JSON content in StructuredResult {structured_result_id}")
-            return
-            
-        # 构建关系图
-        graph_data = build_graph_from_structure(data, str(structured_result_id))
-        
-        # 封装成ECharts格式
-        echarts_option = {
-            "tooltip": {"trigger": "item", "formatter": "{b}<br/>{c}"},
-            "legend": [{"data": ["卖方", "买方", "中人", "契约", "信息"], "bottom": 4}],
-            "series": [graph_data]
-        }
-
-        # 创建RelationGraph
-        relation_graph = RelationGraph(
-            structured_result_id=structured_result_id,
-            content=json.dumps(echarts_option, ensure_ascii=False),
-            status=OcrStatus.DONE,
-            created_at=get_beijing_time()
-        )
-        
-        db.add(relation_graph)
-        db.commit()
-        print(f"Relation graph analysis for {structured_result_id} completed.")
-        
-    except Exception as e:
-        print(f"Error analyzing structured result {structured_result_id}: {str(e)}")
-        relation_graph = RelationGraph(
-            structured_result_id=structured_result_id,
-            content=json.dumps({"error": str(e)}),
-            status=OcrStatus.FAILED,
-            created_at=get_beijing_time()
-        )
-        db.add(relation_graph)
-        db.commit()
-
-
 from app.services.analysis_components.entity_resolver import EntityResolver
-
-# ─────────────────────────────────────────────────────────────
-#  LLM 洞察生成
-# ─────────────────────────────────────────────────────────────
-
-def _build_insights_prompt(statistics: Dict[str, Any], parsed_datas: List[Dict]) -> str:
-    """根据统计数据构造 LLM 分析提示词"""
-    doc_count = statistics.get("doc_count", 0)
-    time_range = statistics.get("time_range", {})
-    unique_people = statistics.get("unique_people", 0)
-    cross_role = statistics.get("cross_role_people", [])
-    top_people = statistics.get("top_people", [])
-    top_locations = statistics.get("top_locations", [])
-    land_chain_count = statistics.get("land_chain_count", 0)
-
-    if time_range.get("start") and time_range.get("end"):
-        time_str = f"公元 {time_range['start']} 年 — {time_range['end']} 年（跨度 {time_range.get('span', 0)} 年）"
-    else:
-        time_str = "时间信息不完整"
-
-    summaries = []
-    for d in parsed_datas[:8]:
-        seller = d.get("Seller", "")
-        buyer = d.get("Buyer", "")
-        loc = d.get("Location", "")
-        price = d.get("Price", "")
-        t = d.get("Time", "")
-        if seller and buyer and all(v not in ["未识别", "未知", ""] for v in [seller, buyer]):
-            parts = [f"{t}：" if t and t not in ["未识别", ""] else ""]
-            parts.append(f"{seller} → {buyer}")
-            if loc and loc not in ["未识别", ""]:
-                parts.append(f"，地点：{loc}")
-            if price and price not in ["未识别", ""]:
-                parts.append(f"，价格：{price}")
-            summaries.append("  - " + "".join(parts))
-
-    cross_str = "、".join(cross_role[:5]) if cross_role else "无"
-    top_people_str = "、".join(
-        [f"{p['name']}（涉及 {p['doc_count']} 份文书）" for p in top_people[:3]]
-    ) if top_people else "数据不足"
-    locations_str = "、".join([l["name"] for l in top_locations[:4]]) if top_locations else "未提取到"
-
-    tx_block = "\n".join(summaries) if summaries else "  （未能提取有效交易摘要）"
-
-    return f"""你是专业的历史文书研究专家，擅长分析中国古代地契的社会关系与经济史意义。
-请根据以下跨文档分析结果，用150-250字撰写一段专业的历史学分析摘要。
-
-【分析数据】
-- 文书总量：{doc_count} 份地契
-- 时间范围：{time_str}
-- 涉及人物：{unique_people} 人
-- 交易概况：
-{tx_block}
-- 角色切换人物（曾在不同文书中既作卖方又作买方）：{cross_str}
-- 核心人物（出现次数最多）：{top_people_str}
-- 主要交易地点：{locations_str}
-- 有多次易手记录的地块数：{land_chain_count} 处
-
-【分析要求】
-请选择有数据支撑的角度进行分析，例如：
-1. 这批文书反映的社会关系网络结构特征
-2. 核心人物在地方经济中扮演的角色
-3. 地产多次易手的历史规律或原因推测
-4. 时代背景与人物活动的关联（如有明确时间）
-
-要求：基于数据客观分析，语言专业凝练，不臆测无据内容，不超过250字。"""
-
-
-def _generate_fallback_insights(statistics: Dict[str, Any]) -> str:
-    """LLM 不可用时生成模板化洞察文字"""
-    doc_count = statistics.get("doc_count", 0)
-    time_range = statistics.get("time_range", {})
-    unique_people = statistics.get("unique_people", 0)
-    cross_role = statistics.get("cross_role_people", [])
-    top_people = statistics.get("top_people", [])
-    land_chain_count = statistics.get("land_chain_count", 0)
-
-    parts = [f"本次跨文档分析共涉及 {doc_count} 份地契文书，"]
-    if time_range.get("start") and time_range.get("end"):
-        parts.append(
-            f"时间跨度从公元 {time_range['start']} 年至 {time_range['end']} 年（历时约 {time_range.get('span', 0)} 年），"
-        )
-    parts.append(f"共涉及 {unique_people} 位历史人物。")
-
-    if cross_role:
-        names = "、".join(cross_role[:3])
-        parts.append(
-            f"其中 {len(cross_role)} 人曾在不同文书中兼任多重角色（包括：{names} 等），"
-            "体现了地方社会中个人土地权益的动态变化。"
-        )
-    if top_people:
-        top_names = "、".join([p["name"] for p in top_people[:3]])
-        parts.append(f"文书网络中的核心人物包括 {top_names} 等，在多份地契中频繁出现。")
-    if land_chain_count > 0:
-        parts.append(f"同一地块被多次转让的情况共出现 {land_chain_count} 处，反映了土地产权的频繁流动。")
-
-    return "".join(parts)
-
-
-def _call_llm_insights_sync(statistics: Dict[str, Any], parsed_datas: List[Dict]) -> str:
-    """调用 LLM 生成跨文档历史洞察（同步）"""
-    if not (HAS_DASHSCOPE and settings.DASHSCOPE_API_KEY):
-        return _generate_fallback_insights(statistics)
-    try:
-        prompt = _build_insights_prompt(statistics, parsed_datas)
-        response = Generation.call(
-            model=Generation.Models.qwen_turbo,
-            prompt=prompt,
-            result_format="message",
-        )
-        if response.status_code == 200:
-            content = response.output.choices[0].message.content.strip()
-            return content if content else _generate_fallback_insights(statistics)
-        else:
-            print(f"LLM insights 调用失败: {response.code} - {response.message}")
-            return _generate_fallback_insights(statistics)
-    except Exception as e:
-        print(f"LLM insights 调用异常: {e}")
-        return _generate_fallback_insights(statistics)
-
-
-async def call_llm_for_insights(statistics: Dict[str, Any], parsed_datas: List[Dict]) -> str:
-    return await run_in_threadpool(_call_llm_insights_sync, statistics, parsed_datas)
-
 
 # ─────────────────────────────────────────────────────────────
 #  跨文档分析主函数（增强版）
@@ -895,3 +531,35 @@ async def analyze_multi_task(multi_task_id: int, db: Session) -> None:
         )
         db.add(multi_relation_graph)
         db.commit()
+
+
+# ── 同步包装器（供 Celery Worker 调用，避免 asyncio.run() 冲突）──────────────
+
+def analyze_ocr_result_sync(ocr_result_id: int, db) -> None:
+    """analyze_ocr_result 的同步包装，在 Celery Worker 中直接调用"""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(analyze_ocr_result(ocr_result_id, db))
+    finally:
+        loop.close()
+
+
+def analyze_structured_result_sync(structured_result_id: int, db) -> None:
+    """analyze_structured_result 的同步包装，在 Celery Worker 中直接调用"""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(analyze_structured_result(structured_result_id, db))
+    finally:
+        loop.close()
+
+
+def analyze_multi_task_sync(multi_task_id: int, db) -> None:
+    """analyze_multi_task 的同步包装，在 Celery Worker 中直接调用"""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(analyze_multi_task(multi_task_id, db))
+    finally:
+        loop.close()

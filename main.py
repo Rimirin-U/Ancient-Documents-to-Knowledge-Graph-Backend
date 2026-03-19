@@ -46,12 +46,23 @@ init_db()
 
 app = FastAPI(title="古代地契文书知识图谱 API", version="2.0.0")
 
+# 允许的来源：本地开发 + 线上服务器地址
+# 如需新增来源，在此列表追加即可
+_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8081",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8081",
+    "http://8.162.9.49:3000",
+    "exp://8.162.9.49:8081",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 if _SLOWAPI_AVAILABLE and limiter is not None:

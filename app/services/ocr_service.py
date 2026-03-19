@@ -6,7 +6,6 @@ import base64
 from sqlalchemy.orm import Session
 from database import SessionLocal, Image, OcrResult, OcrStatus
 from app.core.config import settings
-from fastapi.concurrency import run_in_threadpool
 
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
@@ -96,10 +95,10 @@ def _run_api_predict(input_file: str):
         print(f"API OCR execution failed: {e}")
         return f"Error: {str(e)}"
 
-async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
+def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
     """
     输入：image_id (Image表中的主键)
-    处理：从数据库中查找图片路径，执行OCR
+    处理：从数据库中查找图片路径，执行OCR（同步版本，供 Celery Worker 调用）
     输出：结果保存在OcrResult表中
     成功返回 True，失败返回 False
     """
@@ -109,7 +108,6 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
         close_db = True
 
     try:
-        # 从数据库查找图片记录
         image = db.query(Image).filter(Image.id == image_id).first()
 
         if image is None:
@@ -123,7 +121,6 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
             return False
 
         try:
-            # 创建 OcrResult，状态为 PROCESSING
             ocr_result = OcrResult(
                 image_id=image_id,
                 raw_text="",
@@ -133,18 +130,16 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
             db.commit()
             db.refresh(ocr_result)
 
-            # 执行 OCR 操作 (Async in threadpool using DashScope API)
-            extracted_text = await run_in_threadpool(_run_api_predict, input_file)
+            # 直接调用同步 OCR 函数（无需事件循环）
+            extracted_text = _run_api_predict(input_file)
 
             if not extracted_text or extracted_text.startswith("Error:"):
-                 if not extracted_text:
-                     extracted_text = "模拟OCR文本：未能识别到文字。"
+                if not extracted_text:
+                    extracted_text = "模拟OCR文本：未能识别到文字。"
 
-            # 清理文本
             cleaned_text = re.sub(r"\n{2,}", "\n", extracted_text)
             cleaned_text = cleaned_text.strip()
 
-            # 更新 OcrResult 的内容和状态为 DONE
             ocr_result.raw_text = cleaned_text
             ocr_result.status = OcrStatus.DONE
             db.commit()
@@ -152,7 +147,6 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
             return True
 
         except Exception as e:
-            # 更新 OcrResult 的状态为 FAILED
             if 'ocr_result' in locals():
                 ocr_result.status = OcrStatus.FAILED
                 db.commit()
@@ -162,3 +156,9 @@ async def ocr_image_by_id(image_id: int, db: Session = None) -> bool:
     finally:
         if close_db:
             db.close()
+
+
+async def ocr_image_by_id_async(image_id: int, db: Session = None) -> bool:
+    """异步包装器，供 FastAPI 路由直接调用（非Celery场景）"""
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(ocr_image_by_id, image_id, db)

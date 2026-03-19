@@ -1,5 +1,5 @@
 """认证路由：注册 / 登录 / 登出 / Token 刷新"""
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +11,7 @@ from database import User, get_beijing_time, get_db
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.security import (
+    blacklist_token,
     create_access_token,
     hash_password,
     security,
@@ -33,7 +34,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@router.post("/register")
+@router.post("/register", summary="用户注册", description="创建新用户账号，用户名唯一，邮箱可选")
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.username == request.username).first()
     if existing_user:
@@ -61,7 +62,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/login")
+@router.post("/login", summary="用户登录", description="验证用户名和密码，成功后返回 JWT Bearer Token，有效期24小时")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == request.username).first()
     if not db_user or not verify_password(request.password, db_user.password_hash):
@@ -85,14 +86,22 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/logout")
+@router.post("/logout", summary="用户登出", description="登出后 Token 立即失效，无法继续使用")
 async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    verify_token(token)
-    return {"success": True, "message": "logout ok"}
+    payload = verify_token(token)
+    jti = payload.get("jti")
+    if jti:
+        # 计算 Token 剩余有效秒数，将其加入黑名单
+        from datetime import timezone as tz
+        exp = payload.get("exp", 0)
+        remaining = max(int(exp - datetime.now(tz.utc).timestamp()), 0)
+        blacklist_token(jti, remaining + 60)
+    logger.info("user_logged_out", extra={"user_id": payload.get("user_id")})
+    return {"success": True, "message": "已成功登出"}
 
 
-@router.post("/refresh")
+@router.post("/refresh", summary="刷新 Token", description="使用当前有效 Token 换取新 Token，延长登录有效期")
 async def refresh_token(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),

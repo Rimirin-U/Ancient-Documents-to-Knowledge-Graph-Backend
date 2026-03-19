@@ -28,7 +28,7 @@ class CreateMultiRelationGraphRequest(BaseModel):
 relation_graph_router = APIRouter(prefix="/api/v1/relation-graphs")
 
 
-@relation_graph_router.post("")
+@relation_graph_router.post("", summary="触发单文档关系图生成", description="对指定结构化结果生成 ECharts 格式知识图谱（Celery 异步执行）")
 async def create_relation_graph(
     request: CreateRelationGraphRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -50,7 +50,7 @@ async def create_relation_graph(
     }
 
 
-@relation_graph_router.get("/{relation_graph_id}")
+@relation_graph_router.get("/{relation_graph_id}", summary="获取单文档关系图", description="返回指定关系图的 ECharts 节点/边数据（content字段），status 为 done 时可渲染")
 async def get_relation_graph(
     relation_graph_id: int,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -83,7 +83,7 @@ async def get_relation_graph(
 multi_relation_graph_router = APIRouter(prefix="/api/v1/multi-relation-graphs")
 
 
-@multi_relation_graph_router.post("")
+@multi_relation_graph_router.post("", summary="触发跨文档关系图生成", description="对指定跨文档任务（MultiTask）执行实体消歧 + 多图合并，生成跨文档知识图谱（Celery 异步执行）")
 async def create_multi_relation_graph(
     request: CreateMultiRelationGraphRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -103,7 +103,7 @@ async def create_multi_relation_graph(
     }
 
 
-@multi_relation_graph_router.get("/{multi_relation_graph_id}")
+@multi_relation_graph_router.get("/{multi_relation_graph_id}", summary="获取跨文档关系图", description="返回跨文档合并知识图谱数据，节点包含原始文书溯源信息")
 async def get_multi_relation_graph(
     multi_relation_graph_id: int,
     credentials: HTTPAuthorizationCredentials = Depends(security),

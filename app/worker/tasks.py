@@ -1,14 +1,17 @@
 """
 Celery 异步任务定义
+- 全部为同步任务，避免 asyncio.run() 与 Celery 事件循环冲突
 - 失败后自动重试（最多3次，指数退避间隔）
 - 每个任务记录结构化日志
 """
-import asyncio
-
 from app.core.celery_app import celery_app
 from app.core.logger import get_logger
 from app.services.ocr_service import ocr_image_by_id
-from app.services.analysis_service import analyze_ocr_result, analyze_structured_result, analyze_multi_task
+from app.services.analysis_service import (
+    analyze_ocr_result_sync,
+    analyze_structured_result_sync,
+    analyze_multi_task_sync,
+)
 from database import SessionLocal
 
 logger = get_logger(__name__)
@@ -27,7 +30,7 @@ def task_ocr_image(self, image_id: int):
     logger.info("task_ocr_started", extra={"image_id": image_id, "attempt": self.request.retries + 1})
     db = SessionLocal()
     try:
-        asyncio.run(ocr_image_by_id(image_id, db))
+        ocr_image_by_id(image_id, db)
         logger.info("task_ocr_done", extra={"image_id": image_id})
     except Exception as exc:
         logger.error(
@@ -48,7 +51,7 @@ def task_analyze_ocr_result(self, ocr_result_id: int):
     )
     db = SessionLocal()
     try:
-        asyncio.run(analyze_ocr_result(ocr_result_id, db))
+        analyze_ocr_result_sync(ocr_result_id, db)
         logger.info("task_analyze_done", extra={"ocr_result_id": ocr_result_id})
     except Exception as exc:
         logger.error(
@@ -69,7 +72,7 @@ def task_analyze_structured_result(self, structured_result_id: int):
     )
     db = SessionLocal()
     try:
-        asyncio.run(analyze_structured_result(structured_result_id, db))
+        analyze_structured_result_sync(structured_result_id, db)
         logger.info("task_graph_done", extra={"structured_result_id": structured_result_id})
     except Exception as exc:
         logger.error(
@@ -94,7 +97,7 @@ def task_analyze_multi_task(self, multi_task_id: int):
     )
     db = SessionLocal()
     try:
-        asyncio.run(analyze_multi_task(multi_task_id, db))
+        analyze_multi_task_sync(multi_task_id, db)
         logger.info("task_multi_done", extra={"multi_task_id": multi_task_id})
     except Exception as exc:
         logger.error(

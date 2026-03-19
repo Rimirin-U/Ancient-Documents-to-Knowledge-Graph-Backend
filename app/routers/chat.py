@@ -16,7 +16,11 @@ class ChatQueryRequest(BaseModel):
     question: str
 
 
-@router.post("/query")
+@router.post(
+    "/query",
+    summary="RAG 智能问答",
+    description="基于已上传文书的向量检索增强生成（RAG）问答。返回答案及引用来源（文书文件名/时间/地点/摘要），支持跨文档联合检索",
+)
 async def chat_query(
     request: ChatQueryRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
