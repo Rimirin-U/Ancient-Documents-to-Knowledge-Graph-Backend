@@ -1,106 +1,82 @@
+"""
+RAG 问答服务（含引用溯源）
 
+流程：
+  1. 问题向量化（DashScope TextEmbedding）
+  2. ChromaDB 向量检索 top-3 相关文档（含元数据）
+  3. DashScope Qwen-Turbo 生成回答
+  4. 返回 answer + sources（每条含 doc_id / filename / excerpt / image_id）
+"""
 import json
-import os
-import dashscope
-from datetime import datetime, timezone
-from sqlalchemy.orm import Session
-from database import StructuredResult
-from app.core.config import settings
-from fastapi.concurrency import run_in_threadpool
 
-# RAG 配置
+import dashscope
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
+
 if settings.DASHSCOPE_API_KEY:
     dashscope.api_key = settings.DASHSCOPE_API_KEY
 
-def _get_text_embeddings_sync(text: str):
-    """调用 DashScope 获取文本向量 (Sync)"""
+
+# ── 向量化 ────────────────────────────────────────────────────
+
+def _get_text_embeddings_sync(text: str) -> list:
     if not settings.DASHSCOPE_API_KEY:
-        # 模拟向量
         return [0.1] * 1536
-        
     try:
         resp = dashscope.TextEmbedding.call(
             model=dashscope.TextEmbedding.Models.text_embedding_v1,
-            input=text
+            input=text,
         )
         if resp.status_code == 200:
-            return resp.output['embeddings'][0]['embedding']
-        else:
-            print(f"Embedding failed: {resp}")
-            return [0.1] * 1536
+            return resp.output["embeddings"][0]["embedding"]
+        logger.warning("embedding_failed", extra={"code": resp.status_code})
+        return [0.1] * 1536
     except Exception as e:
-        print(f"Embedding error: {e}")
+        logger.warning("embedding_error", extra={"error": str(e)})
         return [0.1] * 1536
 
-async def get_text_embeddings(text: str):
+
+async def get_text_embeddings(text: str) -> list:
     return await run_in_threadpool(_get_text_embeddings_sync, text)
 
-def cosine_similarity(vec1, vec2):
-    """计算余弦相似度"""
-    import math
-    dot_product = sum(a*b for a,b in zip(vec1, vec2))
-    norm_a = math.sqrt(sum(a*a for a in vec1))
-    norm_b = math.sqrt(sum(b*b for b in vec2))
-    return dot_product / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
-from app.services.vector_store.chroma import get_collection
+# ── 检索 ──────────────────────────────────────────────────────
 
-async def retrieve_context(question_vec, db: Session, top_k=3):
+async def retrieve_context(question_vec: list, top_k: int = 3) -> list[dict]:
     """
-    使用 ChromaDB 进行向量检索
+    使用 ChromaDB 进行向量检索。
+    返回列表，每条含 text / metadata / distance。
     """
-    try:
-        collection = get_collection()
-
-        # 集合为空时直接返回，避免 ChromaDB 抛异常
-        count = collection.count()
-        if count == 0:
-            return []
-
-        # n_results 不能超过集合中实际文档数
-        actual_top_k = min(top_k, count)
-
-        results = collection.query(
-            query_embeddings=[question_vec],
-            n_results=actual_top_k
-        )
-
-        if results['documents'] and results['documents'][0]:
-            return results['documents'][0]
-    except Exception as e:
-        print(f"ChromaDB retrieve error: {e}")
-
-    return []
-
-def index_document(doc_id: str, text: str, embedding: list):
-    """
-    将文档索引到 ChromaDB（upsert 避免重复 ID 报错）
-    """
-    collection = get_collection()
-    collection.upsert(
-        documents=[text],
-        embeddings=[embedding],
-        ids=[doc_id]
-    )
+    from app.services.vector_store.chroma import query_documents
+    return await run_in_threadpool(query_documents, question_vec, top_k)
 
 
-def _generate_answer_sync(question: str, context_list: list):
-    """调用 LLM 生成回答 (Sync)"""
+# ── 生成回答 ──────────────────────────────────────────────────
+
+def _generate_answer_sync(question: str, context_items: list[dict]) -> str:
     if not settings.DASHSCOPE_API_KEY:
-        return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。请联系管理员配置 API Key。"
+        return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。"
 
-    if not context_list:
+    if not context_items:
         context_hint = "（知识库中暂无相关文档，将根据通用知识作答）"
         context_str = ""
     else:
         context_hint = ""
-        context_str = "\n".join([f"- {c}" for c in context_list])
+        context_str = "\n".join(
+            [f"- [{i+1}] {item['text']}" for i, item in enumerate(context_items)]
+        )
 
     messages = [
         {
             "role": "system",
             "content": (
-                "你是一个专业的古籍研究助手。请根据提供的参考资料回答用户问题。"
+                "你是一个专业的古籍研究助手。请根据提供的参考资料回答用户问题，"
+                "回答时标注引用来源编号如 [1]、[2] 等。"
                 "如果参考资料为空或没有相关内容，请依据通用知识作答，并如实说明。"
             ),
         },
@@ -118,41 +94,75 @@ def _generate_answer_sync(question: str, context_list: list):
         response = dashscope.Generation.call(
             model="qwen-turbo",
             messages=messages,
-            result_format='message'
+            result_format="message",
         )
         if response.status_code == 200:
-            # 兼容属性访问和字典访问两种 dashscope 版本
             try:
                 return response.output.choices[0].message.content
             except (AttributeError, IndexError, TypeError):
-                return response.output['choices'][0]['message']['content']
-        else:
-            print(f"LLM generation failed: {response.code} - {response.message}")
-            return f"生成回答失败（{response.code}），请稍后再试。"
+                return response.output["choices"][0]["message"]["content"]
+        logger.warning("llm_generation_failed", extra={"code": response.code})
+        return f"生成回答失败（{response.code}），请稍后再试。"
     except Exception as e:
-        print(f"LLM generation error: {e}")
+        logger.error("llm_generation_error", extra={"error": str(e)})
         return "生成过程发生错误，请稍后再试。"
 
-async def generate_answer(question: str, context_list: list):
-    return await run_in_threadpool(_generate_answer_sync, question, context_list)
 
-async def rag_pipeline(question: str, db: Session):
-    """RAG 主流程"""
+async def generate_answer(question: str, context_items: list[dict]) -> str:
+    return await run_in_threadpool(_generate_answer_sync, question, context_items)
+
+
+# ── RAG 主流程 ────────────────────────────────────────────────
+
+async def rag_pipeline(question: str, db: Session) -> dict:
+    """
+    RAG 主流程。
+    返回：
+      {
+        "answer": str,
+        "sources": [
+          {
+            "index": 1,
+            "doc_id": "sr_5",
+            "image_id": 3,
+            "filename": "contract_abc.jpg",
+            "time": "乾隆五年",
+            "location": "山西省平遥县",
+            "excerpt": "前20字摘要..."
+          },
+          ...
+        ]
+      }
+    """
     try:
-        # 1. 问题向量化
         q_vec = await get_text_embeddings(question)
-
-        # 2. 检索相关文档（空库或异常时返回空列表，不中断流程）
-        context = await retrieve_context(q_vec, db)
-
-        # 3. 生成回答
-        answer = await generate_answer(question, context)
+        context_items = await retrieve_context(q_vec)
+        answer = await generate_answer(question, context_items)
     except Exception as e:
-        print(f"RAG pipeline unexpected error: {e}")
+        logger.error("rag_pipeline_error", extra={"error": str(e)})
         answer = "抱歉，处理您的问题时出现了意外错误，请稍后再试。"
-        context = []
+        context_items = []
 
-    return {
-        "answer": answer,
-        "sources": context
-    }
+    sources = []
+    for i, item in enumerate(context_items):
+        meta = item.get("metadata", {})
+        text = item.get("text", "")
+        sources.append(
+            {
+                "index": i + 1,
+                "doc_id": meta.get("structured_result_id", ""),
+                "image_id": meta.get("image_id", ""),
+                "filename": meta.get("filename", "未知文件"),
+                "time": meta.get("time", ""),
+                "location": meta.get("location", ""),
+                "excerpt": text[:60] + ("..." if len(text) > 60 else ""),
+            }
+        )
+
+    return {"answer": answer, "sources": sources}
+
+
+# 兼容旧调用（analysis_service.py 中的 index_document 调用已迁移到 chroma.py，保留此函数供外部使用）
+def index_document(doc_id: str, text: str, embedding: list) -> None:
+    from app.services.vector_store.chroma import upsert_document
+    upsert_document(doc_id=doc_id, text=text, embedding=embedding)

@@ -121,12 +121,26 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         db.commit()
         print(f"Structured analysis for {ocr_result_id} completed.")
 
-        # 将 OCR 原文自动索引到 ChromaDB，供 RAG 问答检索
+        # 将 OCR 原文自动索引到 ChromaDB，供 RAG 问答检索（携带元数据以支持溯源）
         try:
-            from app.services.rag_service import index_document, _get_text_embeddings_sync
+            from app.services.rag_service import _get_text_embeddings_sync
+            from app.services.vector_store.chroma import upsert_document
             embedding = _get_text_embeddings_sync(ocr_result.raw_text)
-            index_document(f"sr_{structured_result.id}", ocr_result.raw_text, embedding)
-            print(f"Document sr_{structured_result.id} indexed to ChromaDB.")
+            metadata = {
+                "structured_result_id": structured_result.id,
+                "ocr_result_id": ocr_result.id,
+                "image_id": ocr_result.image_id,
+                "filename": structured_data.get("filename", ""),
+                "time": structured_data.get("Time", ""),
+                "location": structured_data.get("Location", ""),
+            }
+            upsert_document(
+                doc_id=f"sr_{structured_result.id}",
+                text=ocr_result.raw_text,
+                embedding=embedding,
+                metadata=metadata,
+            )
+            print(f"Document sr_{structured_result.id} indexed to ChromaDB with metadata.")
         except Exception as idx_err:
             print(f"ChromaDB indexing failed (non-fatal): {idx_err}")
 
