@@ -31,47 +31,108 @@ _STRUCTURE_FALLBACK: Dict[str, Any] = {
     "Middleman": "未识别",
     "Price": "未识别",
     "Subject": "未识别",
-    "Translation": "由于未配置有效的LLM API Key，无法生成翻译和精确提取。请配置DASHSCOPE_API_KEY环境变量。",
+    "Translation": "未配置 DASHSCOPE_API_KEY，无法生成译文。",
 }
+
+# ── Pass 1：信息提取专用 Prompt ───────────────────────────────
+_EXTRACT_SYSTEM = """\
+你是一名专研明清地契文书的历史文献专家。
+请从古代契约 OCR 文本中精确提取以下字段，以合法 JSON 返回，字段含义如下：
+
+- Time        : 契约签订的原文纪年（如"道光十二年三月"）
+- Time_AD     : 对应公元年份整数（无法判断时填 null）
+- Location    : 土地或房产的具体位置描述
+- Seller      : 卖方/出租方姓名（多人时用顿号分隔）
+- Buyer       : 买方/承租方姓名（多人时用顿号分隔）
+- Middleman   : 中人/见证人/代书人姓名（多人时用顿号分隔）
+- Price       : 交易价格，含货币单位（如"纹银八两五钱"）
+- Subject     : 交易标的物描述（如"旱地一亩三分"、"瓦房三间"）
+
+规则：
+1. 只输出纯 JSON，不加 markdown 代码块标记
+2. 原文中没有的字段填 "未记载"
+3. 不要推断或补充原文没有的内容
+"""
+
+# ── Pass 2：译文专用 Prompt ───────────────────────────────────
+_TRANSLATE_SYSTEM = """\
+你是一名精通古代汉语的历史文献研究员，专门从事明清地契文书的白话文翻译。
+
+翻译要求：
+1. 将原文的文言文逐句翻译为现代标准汉语（白话文）
+2. 保留人名、地名、官职名等专有名词，不做更改
+3. 大写数字（壹贰叁肆…）翻译为阿拉伯数字或汉字小写数字
+4. 计量单位（亩、分、厘、两、钱、文）保持不变，在括号内注明换算（如有把握）
+5. 契约套语（如"恐口无凭，立此契约为据"）翻译为通顺的现代表述
+6. 因图片损毁而出现的 □ 占位符在译文中保留为"（字迹不清）"
+7. 译文应忠实原文，不添加原文没有的解释或评论
+8. 输出格式：直接输出译文，不加任何前缀或说明
+"""
+
+
+def _parse_json_response(content: str) -> Dict[str, Any]:
+    """从 LLM 响应中提取 JSON，兼容带 markdown 代码块的情况"""
+    content = re.sub(r"^```(?:json)?\s*", "", content.strip())
+    content = re.sub(r"\s*```$", "", content)
+    return json.loads(content)
+
+
+def _call_llm_messages(system: str, user: str, model: str = "qwen-plus") -> str:
+    """通用 messages 格式调用，返回纯文本"""
+    response = Generation.call(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        result_format="message",
+    )
+    if response.status_code == 200:
+        return response.output.choices[0].message.content.strip()
+    raise RuntimeError(f"LLM 调用失败: {response.code} - {response.message}")
 
 
 def call_structure_llm_sync(text: str) -> Dict[str, Any]:
-    """调用 LLM 从地契 OCR 文本中提取结构化字段（同步）"""
-    if HAS_DASHSCOPE and settings.DASHSCOPE_API_KEY:
-        prompt = f"""
-        你是一个专业的古籍文档分析专家。请分析以下地契文档的OCR识别结果，提取关键信息并以JSON格式返回。
+    """
+    两阶段结构化分析：
+      Pass 1（qwen-plus）：提取结构化字段（Time / Seller / Buyer 等）
+      Pass 2（qwen-plus）：生成高质量白话文译文
+    两个任务分开调用，互不干扰，均使用更强模型。
+    """
+    if not (HAS_DASHSCOPE and settings.DASHSCOPE_API_KEY):
+        return _STRUCTURE_FALLBACK.copy()
 
-        需要提取的字段如下：
-        - Time: 契约签订时间（原文）
-        - Time_AD: 契约签订时间（公元纪年，整数年份，如1832）
-        - Location: 土地/房产位置
-        - Seller: 卖方姓名
-        - Buyer: 买方姓名
-        - Middleman: 中人/见证人姓名
-        - Price: 交易价格（包含单位）
-        - Subject: 交易标的物（如田地面积、房屋等）
-        - Translation: 文档的现代文翻译
+    result = _STRUCTURE_FALLBACK.copy()
 
-        OCR文本内容：
-        {text}
+    # ── Pass 1：结构化字段提取 ────────────────────────────────
+    try:
+        raw = _call_llm_messages(
+            system=_EXTRACT_SYSTEM,
+            user=f"以下是古代契约文书的 OCR 文本，请提取结构化信息：\n\n{text}",
+            model="qwen-plus",
+        )
+        extracted = _parse_json_response(raw)
+        # 只接受已知字段，防止意外键污染
+        for key in ("Time", "Time_AD", "Location", "Seller", "Buyer",
+                    "Middleman", "Price", "Subject"):
+            if key in extracted:
+                result[key] = extracted[key]
+    except Exception as e:
+        print(f"[llm_client] 结构化提取失败: {e}")
 
-        请仅返回JSON字符串，不要包含markdown标记或其他无关内容。
-        """
-        try:
-            response = Generation.call(
-                model=Generation.Models.qwen_turbo,
-                prompt=prompt,
-                result_format="message",
-            )
-            if response.status_code == 200:
-                content = response.output.choices[0].message.content
-                content = re.sub(r"^```json\s*", "", content)
-                content = re.sub(r"\s*```$", "", content)
-                return json.loads(content)
-            print(f"LLM结构化提取失败: {response.code} - {response.message}")
-        except Exception as e:
-            print(f"LLM结构化提取异常: {e}")
-    return _STRUCTURE_FALLBACK.copy()
+    # ── Pass 2：白话文译文 ────────────────────────────────────
+    try:
+        translation = _call_llm_messages(
+            system=_TRANSLATE_SYSTEM,
+            user=f"请将以下古代契约文书翻译为现代白话文：\n\n{text}",
+            model="qwen-plus",
+        )
+        result["Translation"] = translation
+    except Exception as e:
+        print(f"[llm_client] 译文生成失败: {e}")
+        result["Translation"] = "译文生成失败，请重新分析。"
+
+    return result
 
 
 async def call_structure_llm(text: str) -> Dict[str, Any]:
@@ -175,8 +236,8 @@ def call_insights_llm_sync(statistics: Dict[str, Any], parsed_datas: List[Dict])
     try:
         prompt = _build_insights_prompt(statistics, parsed_datas)
         response = Generation.call(
-            model=Generation.Models.qwen_turbo,
-            prompt=prompt,
+            model="qwen-plus",
+            messages=[{"role": "user", "content": prompt}],
             result_format="message",
         )
         if response.status_code == 200:
