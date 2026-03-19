@@ -1,6 +1,6 @@
 """
 Celery 异步任务定义
-- 统一错误处理：任务失败后自动重试（最多3次，指数退避）
+- 失败后自动重试（最多3次，指数退避间隔）
 - 每个任务记录结构化日志
 """
 import asyncio
@@ -13,15 +13,15 @@ from database import SessionLocal
 
 logger = get_logger(__name__)
 
+# 重试间隔（秒）：第1次10s、第2次20s、第3次40s
+_RETRY_DELAYS = [10, 20, 40]
 
-@celery_app.task(
-    bind=True,
-    max_retries=3,
-    default_retry_delay=10,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=60,
-)
+
+def _retry_delay(retries: int) -> int:
+    return _RETRY_DELAYS[min(retries, len(_RETRY_DELAYS) - 1)]
+
+
+@celery_app.task(bind=True, max_retries=3)
 def task_ocr_image(self, image_id: int):
     """OCR 异步任务（含自动重试）"""
     logger.info("task_ocr_started", extra={"image_id": image_id, "attempt": self.request.retries + 1})
@@ -34,19 +34,12 @@ def task_ocr_image(self, image_id: int):
             "task_ocr_failed",
             extra={"image_id": image_id, "attempt": self.request.retries + 1, "error": str(exc)},
         )
-        raise
+        raise self.retry(exc=exc, countdown=_retry_delay(self.request.retries))
     finally:
         db.close()
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=3,
-    default_retry_delay=15,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=90,
-)
+@celery_app.task(bind=True, max_retries=3)
 def task_analyze_ocr_result(self, ocr_result_id: int):
     """结构化分析异步任务（含自动重试）"""
     logger.info(
@@ -62,19 +55,12 @@ def task_analyze_ocr_result(self, ocr_result_id: int):
             "task_analyze_failed",
             extra={"ocr_result_id": ocr_result_id, "attempt": self.request.retries + 1, "error": str(exc)},
         )
-        raise
+        raise self.retry(exc=exc, countdown=_retry_delay(self.request.retries))
     finally:
         db.close()
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=3,
-    default_retry_delay=15,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=90,
-)
+@celery_app.task(bind=True, max_retries=3)
 def task_analyze_structured_result(self, structured_result_id: int):
     """关系图生成异步任务（含自动重试）"""
     logger.info(
@@ -94,19 +80,12 @@ def task_analyze_structured_result(self, structured_result_id: int):
                 "error": str(exc),
             },
         )
-        raise
+        raise self.retry(exc=exc, countdown=_retry_delay(self.request.retries))
     finally:
         db.close()
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=2,
-    default_retry_delay=20,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=120,
-)
+@celery_app.task(bind=True, max_retries=2)
 def task_analyze_multi_task(self, multi_task_id: int):
     """跨文档分析异步任务（含自动重试）"""
     logger.info(
@@ -122,6 +101,6 @@ def task_analyze_multi_task(self, multi_task_id: int):
             "task_multi_failed",
             extra={"multi_task_id": multi_task_id, "attempt": self.request.retries + 1, "error": str(exc)},
         )
-        raise
+        raise self.retry(exc=exc, countdown=_retry_delay(self.request.retries))
     finally:
         db.close()
