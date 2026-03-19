@@ -1,5 +1,6 @@
 """图片路由：上传 / 获取 / 缩略图 / 删除 / 信息 / 触发OCR"""
 import os
+import re
 import uuid
 from typing import List
 
@@ -26,6 +27,30 @@ from app.worker.tasks import task_ocr_image
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/images", tags=["图片管理"])
+
+
+def _friendly_title(filename: str, upload_time) -> str:
+    """
+    从存储文件名（含随机后缀）生成展示友好的标题。
+    例：'contract_scan_a1b2c3d4.jpg' → '地契文书 · 03月19日 14:25'
+    原始名称有意义时保留，否则纯用上传时间。
+    """
+    base = os.path.splitext(filename)[0]
+    # 去掉末尾 _xxxxxxxx 随机哈希
+    clean = re.sub(r'_[0-9a-f]{8}$', '', base).strip()
+    # 过滤掉手机相机生成的无意义名称（纯数字/IMG/DSC/photo 等）
+    generic_patterns = re.compile(
+        r'^(img|image|photo|dsc|pic|screenshot|scan|capture|frame|'
+        r'file|\d+|img_\d+|dsc_\d+|photo_\d+)$',
+        re.IGNORECASE,
+    )
+    if not clean or generic_patterns.fullmatch(clean):
+        # 仅用上传时间命名
+        t = upload_time
+        return f"地契文书 · {t.month}月{t.day}日 {t.strftime('%H:%M')}"
+    # 有意义的文件名 + 上传日期
+    t = upload_time
+    return f"{clean} · {t.month}月{t.day}日"
 
 
 def _build_thumbnail_path(filename: str) -> str:
@@ -168,7 +193,7 @@ async def get_image_info(
             "id": db_image.id,
             "filename": db_image.filename,
             "upload_time": db_image.upload_time.isoformat(),
-            "title": db_image.filename,
+            "title": _friendly_title(db_image.filename, db_image.upload_time),
         },
     }
 

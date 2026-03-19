@@ -8,6 +8,8 @@ RAG 问答服务（含引用溯源）
   4. 返回 answer + sources（每条含 doc_id / filename / excerpt / image_id）
 """
 import json
+import os
+import re
 
 import dashscope
 from fastapi.concurrency import run_in_threadpool
@@ -112,6 +114,27 @@ async def generate_answer(question: str, context_items: list[dict]) -> str:
     return await run_in_threadpool(_generate_answer_sync, question, context_items)
 
 
+# ── 文件名清洗工具 ────────────────────────────────────────────
+
+_GENERIC_NAME_RE = re.compile(
+    r'^(img|image|photo|dsc|pic|screenshot|scan|capture|frame|file|\d+|'
+    r'img_\d+|dsc_\d+|photo_\d+)$',
+    re.IGNORECASE,
+)
+
+
+def _friendly_filename(raw_filename: str, image_id) -> str:
+    """将原始存储文件名转换为可读展示名称"""
+    if not raw_filename:
+        return f"文书 #{image_id}" if image_id else "未知文书"
+    base = os.path.splitext(raw_filename)[0]
+    # 去掉末尾 _xxxxxxxx 随机哈希
+    clean = re.sub(r'_[0-9a-f]{8}$', '', base).strip()
+    if not clean or _GENERIC_NAME_RE.fullmatch(clean):
+        return f"文书 #{image_id}" if image_id else "未知文书"
+    return clean
+
+
 # ── RAG 主流程 ────────────────────────────────────────────────
 
 async def rag_pipeline(question: str, db: Session) -> dict:
@@ -147,12 +170,15 @@ async def rag_pipeline(question: str, db: Session) -> dict:
     for i, item in enumerate(context_items):
         meta = item.get("metadata", {})
         text = item.get("text", "")
+        image_id = meta.get("image_id", "")
+        raw_filename = meta.get("filename", "")
+        display_filename = _friendly_filename(raw_filename, image_id)
         sources.append(
             {
                 "index": i + 1,
                 "doc_id": meta.get("structured_result_id", ""),
-                "image_id": meta.get("image_id", ""),
-                "filename": meta.get("filename", "未知文件"),
+                "image_id": image_id,
+                "filename": display_filename,
                 "time": meta.get("time", ""),
                 "location": meta.get("location", ""),
                 "excerpt": text[:60] + ("..." if len(text) > 60 else ""),

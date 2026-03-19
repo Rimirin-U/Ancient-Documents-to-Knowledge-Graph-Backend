@@ -140,22 +140,37 @@ def build_graph_from_structure(data: Dict[str, Any], doc_id: str) -> Dict[str, A
 
 
 async def analyze_structured_result(structured_result_id: int, db: Session) -> None:
-    """对 StructuredResult 构建单文档关系图并持久化"""
+    """
+    对 StructuredResult 构建单文档关系图并持久化。
+    先写入 PROCESSING 状态，构建完成后更新，确保前端触发后立即能查询到记录 ID。
+    """
+    structured_result = (
+        db.query(StructuredResult)
+        .filter(StructuredResult.id == structured_result_id)
+        .first()
+    )
+    if not structured_result:
+        return
+
     try:
-        structured_result = (
-            db.query(StructuredResult)
-            .filter(StructuredResult.id == structured_result_id)
-            .first()
-        )
-        if not structured_result:
-            return
+        data = json.loads(structured_result.content)
+    except json.JSONDecodeError:
+        print(f"Invalid JSON in StructuredResult {structured_result_id}")
+        return
 
-        try:
-            data = json.loads(structured_result.content)
-        except json.JSONDecodeError:
-            print(f"Invalid JSON in StructuredResult {structured_result_id}")
-            return
+    # ① 立即写入 PROCESSING 状态
+    relation_graph = RelationGraph(
+        structured_result_id=structured_result_id,
+        content=json.dumps({}),
+        status=OcrStatus.PROCESSING,
+        created_at=get_beijing_time(),
+    )
+    db.add(relation_graph)
+    db.commit()
+    db.refresh(relation_graph)
 
+    try:
+        # ② 构建关系图（CPU 密集，但数据量小，同步即可）
         graph_data = build_graph_from_structure(data, str(structured_result_id))
         echarts_option = {
             "tooltip": {"trigger": "item", "formatter": "{b}<br/>{c}"},
@@ -163,23 +178,14 @@ async def analyze_structured_result(structured_result_id: int, db: Session) -> N
             "series": [graph_data],
         }
 
-        relation_graph = RelationGraph(
-            structured_result_id=structured_result_id,
-            content=json.dumps(echarts_option, ensure_ascii=False),
-            status=OcrStatus.DONE,
-            created_at=get_beijing_time(),
-        )
-        db.add(relation_graph)
+        # ③ 更新为 DONE 状态
+        relation_graph.content = json.dumps(echarts_option, ensure_ascii=False)
+        relation_graph.status = OcrStatus.DONE
         db.commit()
         print(f"Relation graph for StructuredResult {structured_result_id} completed.")
 
     except Exception as e:
         print(f"Error building relation graph {structured_result_id}: {e}")
-        relation_graph = RelationGraph(
-            structured_result_id=structured_result_id,
-            content=json.dumps({"error": str(e)}),
-            status=OcrStatus.FAILED,
-            created_at=get_beijing_time(),
-        )
-        db.add(relation_graph)
+        relation_graph.content = json.dumps({"error": str(e)})
+        relation_graph.status = OcrStatus.FAILED
         db.commit()

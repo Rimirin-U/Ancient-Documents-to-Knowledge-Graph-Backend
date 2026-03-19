@@ -31,41 +31,45 @@ from app.services.graph_service import (
 
 async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
     """
-    对OcrResult进行结构化分析
+    对OcrResult进行结构化分析。
+    与 OCR 流程保持一致：先立即写入 PROCESSING 状态，再执行 LLM，
+    这样前端触发后立刻查询就能拿到记录 ID 并开始轮询。
     """
+    ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_result_id).first()
+    if not ocr_result:
+        print(f"OcrResult {ocr_result_id} not found")
+        return
+
+    if not ocr_result.raw_text:
+        print(f"OcrResult {ocr_result_id} has no text")
+        return
+
+    # ① 立即写入 PROCESSING 状态（与 OCR 保持一致，让前端能立即轮询到）
+    structured_result = StructuredResult(
+        ocr_result_id=ocr_result_id,
+        content=json.dumps({}),
+        status=OcrStatus.PROCESSING,
+        created_at=get_beijing_time(),
+    )
+    db.add(structured_result)
+    db.commit()
+    db.refresh(structured_result)
+
     try:
-        # 获取OcrResult
-        ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_result_id).first()
-        if not ocr_result:
-            print(f"OcrResult {ocr_result_id} not found")
-            return
-        
-        if not ocr_result.raw_text:
-            print(f"OcrResult {ocr_result_id} has no text")
-            ocr_result.status = OcrStatus.FAILED
-            db.commit()
-            return
-
-        # 调用分析逻辑
+        # ② 调用 LLM 结构化提取
         structured_data = await call_llm_for_structure(ocr_result.raw_text)
-        
-        # 补充文件名信息
-        if ocr_result.image:
-             structured_data["filename"] = ocr_result.image.filename
 
-        # 创建StructuredResult
-        structured_result = StructuredResult(
-            ocr_result_id=ocr_result_id,
-            content=json.dumps(structured_data, ensure_ascii=False),
-            status=OcrStatus.DONE,
-            created_at=get_beijing_time()
-        )
-        
-        db.add(structured_result)
+        # 补充文件名信息（用于 RAG 元数据）
+        if ocr_result.image:
+            structured_data["filename"] = ocr_result.image.filename
+
+        # ③ 更新为 DONE 状态
+        structured_result.content = json.dumps(structured_data, ensure_ascii=False)
+        structured_result.status = OcrStatus.DONE
         db.commit()
         print(f"Structured analysis for {ocr_result_id} completed.")
 
-        # 将 OCR 原文自动索引到 ChromaDB，供 RAG 问答检索（携带元数据以支持溯源）
+        # ④ 写入 ChromaDB 向量索引，供 RAG 检索
         try:
             from app.services.rag_service import _get_text_embeddings_sync
             from app.services.vector_store.chroma import upsert_document
@@ -84,19 +88,14 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
                 embedding=embedding,
                 metadata=metadata,
             )
-            print(f"Document sr_{structured_result.id} indexed to ChromaDB with metadata.")
+            print(f"Document sr_{structured_result.id} indexed to ChromaDB.")
         except Exception as idx_err:
             print(f"ChromaDB indexing failed (non-fatal): {idx_err}")
 
     except Exception as e:
-        print(f"Error analyzing OCR result {ocr_result_id}: {str(e)}")
-        structured_result = StructuredResult(
-            ocr_result_id=ocr_result_id,
-            content=json.dumps({"error": str(e)}),
-            status=OcrStatus.FAILED,
-            created_at=get_beijing_time()
-        )
-        db.add(structured_result)
+        print(f"Error analyzing OCR result {ocr_result_id}: {e}")
+        structured_result.content = json.dumps({"error": str(e)})
+        structured_result.status = OcrStatus.FAILED
         db.commit()
 
 
