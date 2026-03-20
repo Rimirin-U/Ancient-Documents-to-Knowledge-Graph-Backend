@@ -58,18 +58,29 @@ _RELEVANCE_THRESHOLD = 1.8
 
 async def retrieve_context(
     question_vec: list,
-    top_k: int = 5,
+    top_k: int = 8,
     user_id: int | None = None,
 ) -> list:
     """
     使用 ChromaDB 进行向量检索，并过滤距离超过阈值的不相关结果。
-    user_id: 若传入则只检索该用户的文档（资料库隔离）。
+    user_id: 若传入则优先只检索该用户的文档；若用户维度无结果（旧文档尚未含
+             user_id 字段），自动回退到全局检索，兼容历史数据。
     返回列表，每条含 text / metadata / distance。
     """
     from app.services.vector_store.chroma import query_documents
     where = {"user_id": user_id} if user_id is not None else None
     results = await run_in_threadpool(query_documents, question_vec, top_k, where)
+
+    # 若用户维度过滤后无结果，说明旧文档未含 user_id，回退到全局检索
+    if not results and where:
+        logger.info(
+            "retrieve_fallback_to_global",
+            extra={"user_id": user_id, "hint": "old docs without user_id, run reindex"},
+        )
+        results = await run_in_threadpool(query_documents, question_vec, top_k, None)
+
     filtered = [r for r in results if r.get("distance", 0) <= _RELEVANCE_THRESHOLD]
+    # 至少保留相似度最高的 2 条，避免完全没有参考来源
     return filtered if filtered else results[:2]
 
 

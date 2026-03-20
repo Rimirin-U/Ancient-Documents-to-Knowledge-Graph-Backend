@@ -170,10 +170,11 @@ async def chat_query_stream(
 async def kb_status(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
-    verify_token(credentials.credentials)
+    payload = verify_token(credentials.credentials)
+    user_id = payload.get("user_id")
     try:
-        from app.services.vector_store.chroma import get_collection
-        count = get_collection().count()
+        from app.services.vector_store.chroma import count_documents
+        count = count_documents(where={"user_id": user_id})
         return {"success": True, "data": {"indexed_count": count}}
     except Exception:
         return {"success": True, "data": {"indexed_count": 0}}

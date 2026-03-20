@@ -88,6 +88,23 @@ def query_documents(
         return []
 
 
+def count_documents(where: dict | None = None) -> int:
+    """
+    统计满足条件的文档数量。
+    where: 元数据过滤条件（如 {"user_id": 1}），None 时统计全部。
+    """
+    try:
+        collection = get_collection()
+        if where:
+            results = collection.get(where=where, include=[])
+            return len(results.get("ids", []))
+        return collection.count()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("chroma_count_error: %s", e)
+        return 0
+
+
 def delete_documents(doc_ids: list[str]) -> None:
     """
     从集合中批量删除文档（用于图片删除时同步清理向量索引）。
