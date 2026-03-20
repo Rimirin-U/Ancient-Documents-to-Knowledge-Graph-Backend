@@ -69,7 +69,7 @@ celery -A app.core.celery_app worker --loglevel=info --concurrency=2
 ## 集成测试
 
 ```bash
-pip install pytest requests
+pip install -r requirements-dev.txt
 ```
 
 运行前打开 `api_test/test_api.py`，将 **`BASE_URL`** 设为与当前 uvicorn 端口一致，例如：
@@ -87,10 +87,6 @@ pytest api_test/test_api.py -v -s
 ## 限流
 
 若已安装 **slowapi**，`main.py` 会注册默认 `200/minute` 限流；未安装时仅打日志警告，不影响启动。
-
-## 说明：`requirements.txt` 中的 Paddle
-
-当前 OCR 实现为 DashScope **qwen-vl-max**（见 `app/services/ocr_service.py`），**业务代码未 import PaddleOCR**。`paddlepaddle` / `paddleocr` 仅为依赖列表中的包，若不需要可自行从 `requirements.txt` 移除以缩短安装时间。
 
 ## 说明：`POST /api/v1/images/upload`
 
