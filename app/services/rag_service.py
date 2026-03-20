@@ -94,8 +94,8 @@ def _format_context(context_items: list[dict]) -> str:
 
 def _generate_answer_sync(
     question: str,
-    context_items: list[dict],
-    history: list[dict] | None = None,
+    context_items: list,
+    history=None,
 ) -> str:
     if not settings.DASHSCOPE_API_KEY:
         return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。"
@@ -154,11 +154,7 @@ def _generate_answer_sync(
         return "生成过程发生错误，请稍后再试。"
 
 
-async def generate_answer(
-    question: str,
-    context_items: list[dict],
-    history: list[dict] | None = None,
-) -> str:
+async def generate_answer(question: str, context_items: list, history=None) -> str:
     return await run_in_threadpool(_generate_answer_sync, question, context_items, history)
 
 
@@ -185,11 +181,7 @@ def _friendly_filename(raw_filename: str, image_id) -> str:
 
 # ── RAG 主流程 ────────────────────────────────────────────────
 
-async def rag_pipeline(
-    question: str,
-    db: Session,
-    history: list[dict] | None = None,
-) -> dict:
+async def rag_pipeline(question: str, db: Session, history=None) -> dict:
     """
     RAG 主流程。
     返回：

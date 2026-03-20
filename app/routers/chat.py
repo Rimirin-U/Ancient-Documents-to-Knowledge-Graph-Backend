@@ -42,7 +42,10 @@ async def chat_query(
 
     from app.services.rag_service import rag_pipeline
 
-    history = [h.model_dump() for h in request.history] if request.history else None
+    history = (
+        [{"role": h.role, "content": h.content} for h in request.history]
+        if request.history else None
+    )
     logger.info("chat_query", extra={"user_id": user_id, "question_len": len(request.question)})
 
     try:
@@ -70,7 +73,7 @@ async def kb_status(
         return {"success": True, "data": {"indexed_count": 0}}
 
 
-def _reindex_all_sync(db: Session) -> dict:
+def _reindex_all_sync(db: Session):
     """
     遍历所有 OCR 完成的文档，将未索引或需要更新的文档写入 ChromaDB。
     - 有结构化结果的用富文本（OCR + 结构化字段）
