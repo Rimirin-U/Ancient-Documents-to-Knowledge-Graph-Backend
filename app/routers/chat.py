@@ -54,7 +54,7 @@ async def chat_query(
             if request.history else None
         )
         logger.info("chat_query", extra={"user_id": user_id, "question_len": len(request.question)})
-        result = await rag_pipeline(request.question, db, history)
+        result = await rag_pipeline(request.question, db, history, user_id=user_id)
         return {"success": True, "data": result}
     except HTTPException:
         raise
@@ -97,9 +97,9 @@ async def chat_query_stream(
             _build_sources,
         )
 
-        # 检索阶段（异步）
+        # 检索阶段（异步，限定当前用户的文档）
         q_vec = await get_text_embeddings(request.question)
-        context_items = await retrieve_context(q_vec)
+        context_items = await retrieve_context(q_vec, user_id=user_id)
         sources = _build_sources(context_items)
 
         question = request.question
@@ -179,14 +179,21 @@ async def kb_status(
         return {"success": True, "data": {"indexed_count": 0}}
 
 
-def _reindex_all_sync(db: Session):
+def _reindex_all_sync(db: Session, user_id: int):
     """
-    遍历所有 OCR 完成的文档，将未索引或需要更新的文档写入 ChromaDB。
+    遍历当前用户所有 OCR 完成的文档，将其写入 ChromaDB（upsert）。
+    只索引属于 user_id 的图片，并将 user_id 写入 metadata 实现资料库隔离。
     """
     from app.services.rag_service import _get_text_embeddings_sync
     from app.services.vector_store.chroma import upsert_document
+    from database import Image
 
-    ocr_results = db.query(OcrResult).filter(OcrResult.status == OcrStatus.DONE).all()
+    ocr_results = (
+        db.query(OcrResult)
+        .join(Image, OcrResult.image_id == Image.id)
+        .filter(OcrResult.status == OcrStatus.DONE, Image.user_id == user_id)
+        .all()
+    )
     indexed, skipped = 0, 0
     _EMPTY = {"未识别", "未记载", "None", "null", ""}
 
@@ -206,6 +213,7 @@ def _reindex_all_sync(db: Session):
             )
 
             metadata: dict = {
+                "user_id": user_id,
                 "ocr_result_id": ocr.id,
                 "image_id": ocr.image_id,
                 "filename": ocr.image.filename if ocr.image else "",
@@ -274,9 +282,10 @@ async def reindex(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ):
-    verify_token(credentials.credentials)
-    background_tasks.add_task(_reindex_all_sync, db)
-    logger.info("reindex_triggered")
+    payload = verify_token(credentials.credentials)
+    user_id = payload.get("user_id")
+    background_tasks.add_task(_reindex_all_sync, db, user_id)
+    logger.info("reindex_triggered", extra={"user_id": user_id})
     return {
         "success": True,
         "message": "知识库重建已在后台启动，所有已识别文书将陆续写入，请稍后刷新知识库状态。",

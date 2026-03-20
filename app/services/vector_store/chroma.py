@@ -46,9 +46,11 @@ def upsert_document(
 def query_documents(
     query_embedding: list,
     top_k: int = 3,
+    where: dict | None = None,
 ) -> list[dict]:
     """
     向量检索，返回列表，每条包含 text、metadata 和 distance。
+    where: ChromaDB 元数据过滤条件（如 {"user_id": 1}），None 表示不过滤。
     集合为空或出错时返回空列表。
     """
     try:
@@ -58,11 +60,15 @@ def query_documents(
             return []
 
         actual_top_k = min(top_k, count)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=actual_top_k,
-            include=["documents", "metadatas", "distances"],
-        )
+        query_kwargs: dict = {
+            "query_embeddings": [query_embedding],
+            "n_results": actual_top_k,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            query_kwargs["where"] = where
+
+        results = collection.query(**query_kwargs)
 
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]
@@ -80,3 +86,18 @@ def query_documents(
         import logging
         logging.getLogger(__name__).warning("chroma_query_error: %s", e)
         return []
+
+
+def delete_documents(doc_ids: list[str]) -> None:
+    """
+    从集合中批量删除文档（用于图片删除时同步清理向量索引）。
+    doc_ids 不存在时静默忽略。
+    """
+    if not doc_ids:
+        return
+    try:
+        collection = get_collection()
+        collection.delete(ids=doc_ids)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("chroma_delete_error: %s", e)

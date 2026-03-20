@@ -56,13 +56,19 @@ async def get_text_embeddings(text: str) -> list:
 _RELEVANCE_THRESHOLD = 1.8
 
 
-async def retrieve_context(question_vec: list, top_k: int = 5) -> list:
+async def retrieve_context(
+    question_vec: list,
+    top_k: int = 5,
+    user_id: int | None = None,
+) -> list:
     """
     使用 ChromaDB 进行向量检索，并过滤距离超过阈值的不相关结果。
+    user_id: 若传入则只检索该用户的文档（资料库隔离）。
     返回列表，每条含 text / metadata / distance。
     """
     from app.services.vector_store.chroma import query_documents
-    results = await run_in_threadpool(query_documents, question_vec, top_k)
+    where = {"user_id": user_id} if user_id is not None else None
+    results = await run_in_threadpool(query_documents, question_vec, top_k, where)
     filtered = [r for r in results if r.get("distance", 0) <= _RELEVANCE_THRESHOLD]
     return filtered if filtered else results[:2]
 
@@ -244,7 +250,11 @@ def _build_sources(context_items: list) -> list:
         excerpt = ocr_only[:80].strip() + ("..." if len(ocr_only) > 80 else "")
         image_id = meta.get("image_id", "")
         raw_filename = meta.get("filename", "")
-        display_filename = _friendly_filename(raw_filename, image_id)
+        # 格式与记录页保持一致：#<image_id> <文件名>
+        friendly_name = _friendly_filename(raw_filename, image_id)
+        display_filename = (
+            f"#{image_id} {friendly_name}" if image_id else friendly_name
+        )
         sources.append(
             {
                 "index": i + 1,
@@ -265,14 +275,20 @@ def _build_sources(context_items: list) -> list:
 
 # ── RAG 主流程（非流式）──────────────────────────────────────
 
-async def rag_pipeline(question: str, db: Session, history=None) -> dict:
+async def rag_pipeline(
+    question: str,
+    db: Session,
+    history=None,
+    user_id: int | None = None,
+) -> dict:
     """
     RAG 主流程（非流式版本，保留向后兼容）。
+    user_id: 若传入则只检索该用户的文档。
     返回：{"answer": str, "sources": [...]}
     """
     try:
         q_vec = await get_text_embeddings(question)
-        context_items = await retrieve_context(q_vec)
+        context_items = await retrieve_context(q_vec, user_id=user_id)
         answer = await generate_answer(question, context_items, history)
     except Exception as e:
         logger.error("rag_pipeline_error", extra={"error": str(e)})

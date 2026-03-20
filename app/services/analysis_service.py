@@ -99,6 +99,7 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
 
             embedding = _get_text_embeddings_sync(rich_text)
             metadata = {
+                "user_id": ocr_result.image.user_id if ocr_result.image else 0,
                 "structured_result_id": structured_result.id,
                 "ocr_result_id": ocr_result.id,
                 "image_id": ocr_result.image_id,
