@@ -1,8 +1,12 @@
 """RAG 智能问答路由"""
+import asyncio
+import json as _json
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -10,10 +14,13 @@ from sqlalchemy.orm import Session
 from database import OcrResult, OcrStatus, StructuredResult, get_db
 from app.core.logger import get_logger
 from app.core.security import security, verify_token
-from app.services.rag_service import rag_pipeline  # 模块级导入，启动时暴露错误
+from app.services.rag_service import rag_pipeline
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/chat", tags=["智能问答"])
+
+# 专用线程池，用于在 async 上下文中驱动同步流式生成器
+_stream_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rag_stream")
 
 
 class HistoryTurn(BaseModel):
@@ -23,15 +30,15 @@ class HistoryTurn(BaseModel):
 
 class ChatQueryRequest(BaseModel):
     question: str
-    history: Optional[List[HistoryTurn]] = None  # 近期对话历史（多轮对话支持）
+    history: Optional[List[HistoryTurn]] = None
 
 
 @router.post(
     "/query",
-    summary="RAG 智能问答",
+    summary="RAG 智能问答（非流式）",
     description=(
-        "基于知识库（所有已 OCR 的文书）进行向量检索增强生成（RAG）问答。"
-        "支持多轮对话（传入 history）、引用溯源（返回 sources）。"
+        "基于知识库进行向量检索增强生成（RAG）问答，一次性返回完整回答。"
+        "支持多轮对话（传入 history）和引用溯源（返回 sources）。"
     ),
 )
 async def chat_query(
@@ -39,25 +46,120 @@ async def chat_query(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ):
-    # 整个函数体全部在 try 内，保证任何异常都以 JSON HTTPException 返回
     try:
         payload = verify_token(credentials.credentials)
         user_id = payload.get("user_id")
-
         history = (
             [{"role": h.role, "content": h.content} for h in request.history]
             if request.history else None
         )
         logger.info("chat_query", extra={"user_id": user_id, "question_len": len(request.question)})
-
         result = await rag_pipeline(request.question, db, history)
         return {"success": True, "data": result}
     except HTTPException:
-        raise  # 原样抛出认证等 HTTP 异常
+        raise
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("chat_query_error", extra={"error": str(e), "traceback": tb})
         raise HTTPException(status_code=500, detail=f"问答服务异常：{e}")
+
+
+@router.post(
+    "/query-stream",
+    summary="RAG 流式智能问答（SSE）",
+    description=(
+        "与 /query 功能相同，但通过 Server-Sent Events 流式推送回答。\n\n"
+        "事件格式（每条以 `data: ` 开头，两个换行结束）：\n"
+        "- `{\"type\": \"sources\", \"sources\": [...]}` — 先发送引用来源\n"
+        "- `{\"type\": \"text\", \"delta\": \"...\"}` — 逐块推送答案增量\n"
+        "- `{\"type\": \"done\"}` — 流结束\n"
+        "- `{\"type\": \"error\", \"message\": \"...\"}` — 错误"
+    ),
+)
+async def chat_query_stream(
+    request: ChatQueryRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    try:
+        payload = verify_token(credentials.credentials)
+        user_id = payload.get("user_id")
+        history = (
+            [{"role": h.role, "content": h.content} for h in request.history]
+            if request.history else None
+        )
+        logger.info("chat_stream_query", extra={"user_id": user_id, "question_len": len(request.question)})
+
+        from app.services.rag_service import (
+            get_text_embeddings,
+            retrieve_context,
+            _generate_answer_stream_chunks,
+            _build_sources,
+        )
+
+        # 检索阶段（异步）
+        q_vec = await get_text_embeddings(request.question)
+        context_items = await retrieve_context(q_vec)
+        sources = _build_sources(context_items)
+
+        question = request.question
+        loop = asyncio.get_event_loop()
+
+        async def event_stream():
+            # 先推送引用来源，让前端可以立即展示
+            yield f"data: {_json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False)}\n\n"
+
+            # 用队列桥接同步生成器与异步推送
+            queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+
+            def producer():
+                try:
+                    for chunk in _generate_answer_stream_chunks(question, context_items, history):
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(("text", chunk)), loop
+                        ).result(timeout=30)
+                except Exception as exc:
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(("error", str(exc))), loop
+                    ).result(timeout=5)
+                finally:
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(("done", None)), loop
+                    ).result(timeout=5)
+
+            loop.run_in_executor(_stream_executor, producer)
+
+            while True:
+                try:
+                    event_type, data = await asyncio.wait_for(queue.get(), timeout=90)
+                except asyncio.TimeoutError:
+                    yield f"data: {_json.dumps({'type': 'error', 'message': '生成超时，请重试'}, ensure_ascii=False)}\n\n"
+                    break
+
+                if event_type == "text":
+                    yield f"data: {_json.dumps({'type': 'text', 'delta': data}, ensure_ascii=False)}\n\n"
+                elif event_type == "error":
+                    yield f"data: {_json.dumps({'type': 'error', 'message': data}, ensure_ascii=False)}\n\n"
+                    break
+                elif event_type == "done":
+                    yield f"data: {_json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                    break
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error("chat_stream_error", extra={"error": str(e), "traceback": tb})
+        raise HTTPException(status_code=500, detail=f"流式问答服务异常：{e}")
 
 
 @router.get(
@@ -73,16 +175,13 @@ async def kb_status(
         from app.services.vector_store.chroma import get_collection
         count = get_collection().count()
         return {"success": True, "data": {"indexed_count": count}}
-    except Exception as e:
+    except Exception:
         return {"success": True, "data": {"indexed_count": 0}}
 
 
 def _reindex_all_sync(db: Session):
     """
     遍历所有 OCR 完成的文档，将未索引或需要更新的文档写入 ChromaDB。
-    - 有结构化结果的用富文本（OCR + 结构化字段）
-    - 仅有 OCR 的用纯 OCR 文本
-    返回操作统计。
     """
     from app.services.rag_service import _get_text_embeddings_sync
     from app.services.vector_store.chroma import upsert_document
@@ -96,7 +195,6 @@ def _reindex_all_sync(db: Session):
             skipped += 1
             continue
         try:
-            # 找最新的结构化结果
             struct = (
                 db.query(StructuredResult)
                 .filter(
@@ -118,11 +216,12 @@ def _reindex_all_sync(db: Session):
             rich_text = ocr.raw_text
 
             if struct and struct.content:
-                import json as _json
+                import json as _json_inner
                 try:
-                    sd = _json.loads(struct.content)
+                    sd = _json_inner.loads(struct.content)
                 except Exception:
                     sd = {}
+
                 def _f(k: str) -> str:
                     v = str(sd.get(k, "")).strip()
                     return v if v not in _EMPTY else ""
@@ -167,7 +266,6 @@ label_map = {
     summary="重建知识库索引",
     description=(
         "将所有 OCR 识别完成的文书重新写入向量数据库。"
-        "适用于首次部署、手动补全历史数据，或 ChromaDB 数据丢失后的恢复。"
         "操作在后台异步执行，接口立即返回。"
     ),
 )
@@ -177,7 +275,6 @@ async def reindex(
     db: Session = Depends(get_db),
 ):
     verify_token(credentials.credentials)
-    # 在后台执行，避免阻塞请求
     background_tasks.add_task(_reindex_all_sync, db)
     logger.info("reindex_triggered")
     return {
