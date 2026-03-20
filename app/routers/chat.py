@@ -91,15 +91,16 @@ async def chat_query_stream(
         logger.info("chat_stream_query", extra={"user_id": user_id, "question_len": len(request.question)})
 
         from app.services.rag_service import (
-            get_text_embeddings,
-            retrieve_context,
+            _fetch_latest_docs_sync,
             _generate_answer_stream_chunks,
             _build_sources,
         )
+        from fastapi.concurrency import run_in_threadpool
 
-        # 检索阶段（异步，限定当前用户的文档）
-        q_vec = await get_text_embeddings(request.question)
-        context_items = await retrieve_context(q_vec, user_id=user_id)
+        # 直接从 DB 取最新 8 份文书，无需向量嵌入，更快更准
+        context_items = await run_in_threadpool(
+            _fetch_latest_docs_sync, db, user_id or 0, 8
+        )
         sources = _build_sources(context_items)
 
         question = request.question

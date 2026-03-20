@@ -1,14 +1,13 @@
 """
-RAG 问答服务（含引用溯源、多轮对话、相关性过滤、流式输出）
+RAG 问答服务（含引用溯源、多轮对话、流式输出）
 
-流程：
-  1. 问题向量化（DashScope TextEmbedding）
-  2. ChromaDB 向量检索 top-5（含相关性距离阈值过滤）
-  3. 格式化检索结果为带编号的参考上下文
-  4. 拼入近期对话历史（多轮对话支持）
-  5. DashScope Qwen-Plus 生成回答（支持流式/非流式）
-  6. 返回 answer + sources（每条含 doc_id / filename / 结构化字段 / 摘要）
+流程（v3 - 直取最新 N 条，无需向量检索）：
+  1. 从数据库直接获取当前用户最新 top_n 份已处理文书作为上下文
+  2. 构建简洁 Prompt，拼入对话历史
+  3. DashScope Qwen-Turbo 生成回答（支持流式/非流式）
+  4. 返回 answer + sources
 """
+import json
 import os
 import re
 from typing import Generator
@@ -25,9 +24,7 @@ logger = get_logger(__name__)
 if settings.DASHSCOPE_API_KEY:
     dashscope.api_key = settings.DASHSCOPE_API_KEY
 
-
-# ── 向量化 ────────────────────────────────────────────────────
-
+# 保留向量化函数供重建索引使用
 def _get_text_embeddings_sync(text: str) -> list:
     if not settings.DASHSCOPE_API_KEY:
         return [0.1] * 1536
@@ -49,45 +46,99 @@ async def get_text_embeddings(text: str) -> list:
     return await run_in_threadpool(_get_text_embeddings_sync, text)
 
 
-# ── 检索 ──────────────────────────────────────────────────────
+# ── 直取最新文书（主检索路径）────────────────────────────────────
 
-# 相关性距离阈值（ChromaDB 默认距离算法 L2，值越小越相似）
-# > 1.8 的结果视为不相关，不纳入上下文，避免"无关资料污染答案"
-_RELEVANCE_THRESHOLD = 1.8
+_EMPTY_VALS = {"未识别", "未记载", "None", "null", "none", ""}
 
+
+def _fetch_latest_docs_sync(db: Session, user_id: int, top_n: int = 8) -> list:
+    """
+    从数据库直接获取当前用户最新 top_n 份已完成 OCR 的文书作为上下文。
+    跳过向量嵌入和相似度检索，确保每次都覆盖全部最新文书。
+    """
+    from database import Image, OcrResult, StructuredResult, OcrStatus
+
+    ocr_list = (
+        db.query(OcrResult)
+        .join(Image, OcrResult.image_id == Image.id)
+        .filter(
+            OcrResult.status == OcrStatus.DONE,
+            Image.user_id == user_id,
+            OcrResult.raw_text.isnot(None),
+        )
+        .order_by(Image.upload_time.desc())
+        .limit(top_n)
+        .all()
+    )
+
+    results = []
+    for ocr in ocr_list:
+        struct = (
+            db.query(StructuredResult)
+            .filter(
+                StructuredResult.ocr_result_id == ocr.id,
+                StructuredResult.status == OcrStatus.DONE,
+            )
+            .order_by(StructuredResult.id.desc())
+            .first()
+        )
+
+        meta: dict = {
+            "user_id": ocr.image.user_id if ocr.image else user_id,
+            "ocr_result_id": ocr.id,
+            "image_id": ocr.image_id,
+            "filename": ocr.image.filename if ocr.image else "",
+            "structured_result_id": "",
+            "time": "", "location": "", "seller": "",
+            "buyer": "", "price": "", "subject": "",
+        }
+        text = ocr.raw_text or ""
+
+        if struct and struct.content:
+            try:
+                sd = json.loads(struct.content)
+            except Exception:
+                sd = {}
+
+            def _f(k: str) -> str:
+                v = str(sd.get(k, "")).strip()
+                return v if v not in _EMPTY_VALS else ""
+
+            meta.update({
+                "structured_result_id": struct.id,
+                "time": _f("Time"),
+                "location": _f("Location"),
+                "seller": _f("Seller"),
+                "buyer": _f("Buyer"),
+                "price": _f("Price"),
+                "subject": _f("Subject"),
+            })
+
+        results.append({"text": text, "metadata": meta, "distance": 0.0})
+
+    return results
+
+
+# ── 保留 ChromaDB 检索（供 kb-status / reindex 使用）────────────
 
 async def retrieve_context(
     question_vec: list,
     top_k: int = 8,
     user_id: int | None = None,
 ) -> list:
-    """
-    使用 ChromaDB 进行向量检索，并过滤距离超过阈值的不相关结果。
-    user_id: 若传入则优先只检索该用户的文档；若用户维度无结果（旧文档尚未含
-             user_id 字段），自动回退到全局检索，兼容历史数据。
-    返回列表，每条含 text / metadata / distance。
-    """
+    """ChromaDB 向量检索（保留，主流程已改为 _fetch_latest_docs_sync）"""
     from app.services.vector_store.chroma import query_documents
     where = {"user_id": user_id} if user_id is not None else None
     results = await run_in_threadpool(query_documents, question_vec, top_k, where)
-
-    # 若用户维度过滤后无结果，说明旧文档未含 user_id，回退到全局检索
     if not results and where:
-        logger.info(
-            "retrieve_fallback_to_global",
-            extra={"user_id": user_id, "hint": "old docs without user_id, run reindex"},
-        )
         results = await run_in_threadpool(query_documents, question_vec, top_k, None)
-
-    filtered = [r for r in results if r.get("distance", 0) <= _RELEVANCE_THRESHOLD]
-    # 至少保留相似度最高的 2 条，避免完全没有参考来源
-    return filtered if filtered else results[:2]
+    return results
 
 
 # ── 上下文格式化 ──────────────────────────────────────────────
 
 def _format_context(context_items: list) -> str:
-    """将检索结果格式化为带编号的参考上下文，包含结构化元数据标注。"""
+    """将文书列表格式化为紧凑的参考上下文（每条最多 250 字）。"""
     parts = []
     for i, item in enumerate(context_items):
         meta = item.get("metadata", {})
@@ -97,42 +148,34 @@ def _format_context(context_items: list) -> str:
                             ("seller", "卖方"), ("buyer", "买方"),
                             ("price", "价格"), ("subject", "标的")]:
             v = str(meta.get(key, "")).strip()
-            if v and v not in {"未识别", "未记载", "None", "null", ""}:
-                tags.append(f"{label}：{v}")
-        tag_str = "　".join(tags)
-        header = f"[参考{i+1}]" + (f" （{tag_str}）" if tag_str else "")
-        # 截取前 600 字，提供更充分的上下文
-        excerpt = text[:600] + ("..." if len(text) > 600 else "")
+            if v and v not in _EMPTY_VALS:
+                tags.append(f"{label}:{v}")
+        tag_str = " ".join(tags)
+        header = f"[参考{i+1}]" + (f"({tag_str})" if tag_str else "")
+        excerpt = text[:250] + ("…" if len(text) > 250 else "")
         parts.append(f"{header}\n{excerpt}")
     return "\n\n".join(parts)
 
 
-# ── 消息构建（共享逻辑）────────────────────────────────────────
+# ── 消息构建 ──────────────────────────────────────────────────
 
 def _build_messages(question: str, context_items: list, history=None) -> list:
-    """构建 LLM API 所需的 messages 列表（供同步和流式共用）。"""
+    """构建 LLM messages 列表（简洁版）。"""
     system_msg = {
         "role": "system",
         "content": (
-            "你是一位专研中国古代契约文书的智能问答助手，服务于古代地契文书知识图谱分析平台。\n"
-            "知识库中存储了若干份经过 OCR 识别与结构化分析的地契文书，"
-            "每份文书包含买卖双方、时间、地点、价格、标的等结构化信息。\n\n"
-            "【回答准则】\n"
-            "1. 以检索到的参考文书为主要依据，引用时在句末用 [参考N] 标注来源编号\n"
-            "2. 比较多份文书时，逐条分析并给出总结，观点须有据可查\n"
-            "3. 若参考资料中有明确记载，直接引用原文关键词，不过度推断\n"
-            "4. 若知识库中无相关记录，如实告知「知识库中暂无相关记录」，"
-            "   可结合历史背景知识补充说明，但须与知识库内容明确区分\n"
-            "5. 回答结构清晰，必要时使用列表或分段，避免冗长重复\n"
-            "6. 人名、地名、金额等保持原文写法，不做现代化转换\n"
-            "7. 多轮对话时，结合历史上下文理解意图，代词指代须明确解析"
+            "你是古代地契文书智能问答助手。"
+            "根据参考文书直接作答，引用用[参考N]标注。"
+            "回答简洁专业，不超过150字，条目清晰。"
+            "参考资料不足时如实说明，不编造内容。"
+            "人名地名保持原文。"
         ),
     }
 
     messages = [system_msg]
 
     if history:
-        for turn in history[-8:]:
+        for turn in history[-6:]:
             if isinstance(turn, dict):
                 role, content = turn.get("role", "user"), turn.get("content", "")
             else:
@@ -142,44 +185,37 @@ def _build_messages(question: str, context_items: list, history=None) -> list:
 
     if context_items:
         context_str = _format_context(context_items)
-        user_content = f"【参考文书】\n{context_str}\n\n【问题】{question}"
+        user_content = f"参考文书：\n{context_str}\n\n问题：{question}"
     else:
-        user_content = (
-            f"【说明】知识库中暂未检索到与此问题直接相关的文书，"
-            f"请根据通用古代契约文书知识作答，并注明系通识内容。\n\n【问题】{question}"
-        )
+        user_content = f"（知识库暂无文书）问题：{question}"
+
     messages.append({"role": "user", "content": user_content})
     return messages
 
 
 # ── 同步生成（非流式）────────────────────────────────────────
 
-def _generate_answer_sync(
-    question: str,
-    context_items: list,
-    history=None,
-) -> str:
+def _generate_answer_sync(question: str, context_items: list, history=None) -> str:
     if not settings.DASHSCOPE_API_KEY:
-        return "未配置 DASHSCOPE_API_KEY，无法生成智能回答。"
+        return "未配置 DASHSCOPE_API_KEY，无法生成回答。"
 
     messages = _build_messages(question, context_items, history)
-
     try:
         response = dashscope.Generation.call(
-            model="qwen-plus",
+            model="qwen-turbo",
             messages=messages,
             result_format="message",
-            max_tokens=1500,
+            max_tokens=512,
         )
         if response.status_code == 200:
             try:
                 return response.output.choices[0].message.content
             except (AttributeError, IndexError, TypeError):
                 return response.output["choices"][0]["message"]["content"]
-        logger.warning("llm_generation_failed", extra={"code": response.code})
+        logger.warning("llm_failed", extra={"code": response.code})
         return f"生成回答失败（{response.code}），请稍后再试。"
     except Exception as e:
-        logger.error("llm_generation_error", extra={"error": str(e)})
+        logger.error("llm_error", extra={"error": str(e)})
         return "生成过程发生错误，请稍后再试。"
 
 
@@ -194,22 +230,18 @@ def _generate_answer_stream_chunks(
     context_items: list,
     history=None,
 ) -> Generator[str, None, None]:
-    """
-    同步生成器，逐块 yield 文本增量（用于 SSE 流式推送）。
-    调用方需在线程池中运行此生成器。
-    """
+    """同步生成器，逐块 yield 文本增量。"""
     if not settings.DASHSCOPE_API_KEY:
-        yield "未配置 DASHSCOPE_API_KEY，无法生成智能回答。"
+        yield "未配置 DASHSCOPE_API_KEY，无法生成回答。"
         return
 
     messages = _build_messages(question, context_items, history)
-
     try:
         responses = dashscope.Generation.call(
-            model="qwen-plus",
+            model="qwen-turbo",
             messages=messages,
             result_format="message",
-            max_tokens=1500,
+            max_tokens=512,
             stream=True,
             incremental_output=True,
         )
@@ -225,11 +257,11 @@ def _generate_answer_stream_chunks(
                 logger.warning("stream_chunk_failed", extra={"code": response.status_code})
                 break
     except Exception as e:
-        logger.error("stream_generation_error", extra={"error": str(e)})
+        logger.error("stream_error", extra={"error": str(e)})
         yield "生成过程发生错误，请稍后再试。"
 
 
-# ── 文件名清洗工具 ────────────────────────────────────────────
+# ── 文件名工具 ────────────────────────────────────────────────
 
 _GENERIC_NAME_RE = re.compile(
     r'^(img|image|photo|dsc|pic|screenshot|scan|capture|frame|file|\d+|'
@@ -239,7 +271,6 @@ _GENERIC_NAME_RE = re.compile(
 
 
 def _friendly_filename(raw_filename: str, image_id) -> str:
-    """将原始存储文件名转换为可读展示名称"""
     if not raw_filename:
         return f"文书 #{image_id}" if image_id else "未知文书"
     base = os.path.splitext(raw_filename)[0]
@@ -249,10 +280,9 @@ def _friendly_filename(raw_filename: str, image_id) -> str:
     return clean
 
 
-# ── Sources 构建（共享逻辑）──────────────────────────────────
+# ── Sources 构建 ──────────────────────────────────────────────
 
 def _build_sources(context_items: list) -> list:
-    """将检索到的上下文条目转换为前端可展示的 sources 列表。"""
     sources = []
     for i, item in enumerate(context_items):
         meta = item.get("metadata", {})
@@ -261,30 +291,25 @@ def _build_sources(context_items: list) -> list:
         excerpt = ocr_only[:80].strip() + ("..." if len(ocr_only) > 80 else "")
         image_id = meta.get("image_id", "")
         raw_filename = meta.get("filename", "")
-        # 格式与记录页保持一致：#<image_id> <文件名>
         friendly_name = _friendly_filename(raw_filename, image_id)
-        display_filename = (
-            f"#{image_id} {friendly_name}" if image_id else friendly_name
-        )
-        sources.append(
-            {
-                "index": i + 1,
-                "doc_id": meta.get("structured_result_id", meta.get("ocr_result_id", "")),
-                "image_id": image_id,
-                "filename": display_filename,
-                "time": meta.get("time", ""),
-                "location": meta.get("location", ""),
-                "seller": meta.get("seller", ""),
-                "buyer": meta.get("buyer", ""),
-                "price": meta.get("price", ""),
-                "subject": meta.get("subject", ""),
-                "excerpt": excerpt,
-            }
-        )
+        display_filename = f"#{image_id} {friendly_name}" if image_id else friendly_name
+        sources.append({
+            "index": i + 1,
+            "doc_id": meta.get("structured_result_id", meta.get("ocr_result_id", "")),
+            "image_id": image_id,
+            "filename": display_filename,
+            "time": meta.get("time", ""),
+            "location": meta.get("location", ""),
+            "seller": meta.get("seller", ""),
+            "buyer": meta.get("buyer", ""),
+            "price": meta.get("price", ""),
+            "subject": meta.get("subject", ""),
+            "excerpt": excerpt,
+        })
     return sources
 
 
-# ── RAG 主流程（非流式）──────────────────────────────────────
+# ── RAG 主流程 ────────────────────────────────────────────────
 
 async def rag_pipeline(
     question: str,
@@ -293,13 +318,12 @@ async def rag_pipeline(
     user_id: int | None = None,
 ) -> dict:
     """
-    RAG 主流程（非流式版本，保留向后兼容）。
-    user_id: 若传入则只检索该用户的文档。
-    返回：{"answer": str, "sources": [...]}
+    RAG 主流程：直接从 DB 取最新 8 份文书作为上下文，无需向量检索。
     """
     try:
-        q_vec = await get_text_embeddings(question)
-        context_items = await retrieve_context(q_vec, user_id=user_id)
+        context_items = await run_in_threadpool(
+            _fetch_latest_docs_sync, db, user_id or 0, 8
+        )
         answer = await generate_answer(question, context_items, history)
     except Exception as e:
         logger.error("rag_pipeline_error", extra={"error": str(e)})
