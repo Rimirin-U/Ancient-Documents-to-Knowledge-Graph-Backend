@@ -1,25 +1,44 @@
 """
 ChromaDB 向量存储封装（含元数据支持）
 持久化路径由 settings.UPLOAD_DIR/chromadb 决定，重启后数据不丢失
+
+兼容 chromadb 0.3.x（Client + Settings）与 0.4+（PersistentClient）。
 """
 import os
+from typing import Any
+
 import chromadb
 from app.core.config import settings
 
 
-_client = None
+_client: Any = None
 
 
-def get_chroma_client() -> chromadb.PersistentClient:
+def get_chroma_client() -> Any:
     global _client
     if _client is None:
         persist_directory = os.path.join(settings.UPLOAD_DIR, "chromadb")
         os.makedirs(persist_directory, exist_ok=True)
-        _client = chromadb.PersistentClient(path=persist_directory)
+
+        persistent_cls = getattr(chromadb, "PersistentClient", None)
+        if persistent_cls is not None:
+            try:
+                _client = persistent_cls(path=persist_directory)
+            except TypeError:
+                _client = persistent_cls(persist_directory=persist_directory)
+        else:
+            from chromadb.config import Settings
+
+            _client = chromadb.Client(
+                Settings(
+                    persist_directory=persist_directory,
+                    chroma_db_impl="duckdb+parquet",
+                )
+            )
     return _client
 
 
-def get_collection(name: str = "ancient_docs") -> chromadb.Collection:
+def get_collection(name: str = "ancient_docs") -> Any:
     client = get_chroma_client()
     return client.get_or_create_collection(name=name)
 
