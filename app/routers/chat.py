@@ -1,4 +1,5 @@
 """RAG 智能问答路由"""
+import traceback
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from database import OcrResult, OcrStatus, StructuredResult, get_db
 from app.core.logger import get_logger
 from app.core.security import security, verify_token
+from app.services.rag_service import rag_pipeline  # 模块级导入，启动时暴露错误
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/chat", tags=["智能问答"])
@@ -37,23 +39,25 @@ async def chat_query(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ):
-    payload = verify_token(credentials.credentials)
-    user_id = payload.get("user_id")
-
-    from app.services.rag_service import rag_pipeline
-
-    history = (
-        [{"role": h.role, "content": h.content} for h in request.history]
-        if request.history else None
-    )
-    logger.info("chat_query", extra={"user_id": user_id, "question_len": len(request.question)})
-
+    # 整个函数体全部在 try 内，保证任何异常都以 JSON HTTPException 返回
     try:
+        payload = verify_token(credentials.credentials)
+        user_id = payload.get("user_id")
+
+        history = (
+            [{"role": h.role, "content": h.content} for h in request.history]
+            if request.history else None
+        )
+        logger.info("chat_query", extra={"user_id": user_id, "question_len": len(request.question)})
+
         result = await rag_pipeline(request.question, db, history)
         return {"success": True, "data": result}
+    except HTTPException:
+        raise  # 原样抛出认证等 HTTP 异常
     except Exception as e:
-        logger.error("chat_query_error", extra={"error": str(e), "user_id": user_id})
-        raise HTTPException(status_code=500, detail=str(e))
+        tb = traceback.format_exc()
+        logger.error("chat_query_error", extra={"error": str(e), "traceback": tb})
+        raise HTTPException(status_code=500, detail=f"问答服务异常：{e}")
 
 
 @router.get(

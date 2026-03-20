@@ -56,7 +56,7 @@ async def get_text_embeddings(text: str) -> list:
 _RELEVANCE_THRESHOLD = 1.8
 
 
-async def retrieve_context(question_vec: list, top_k: int = 5) -> list[dict]:
+async def retrieve_context(question_vec: list, top_k: int = 5) -> list:
     """
     使用 ChromaDB 进行向量检索，并过滤距离超过阈值的不相关结果。
     返回列表，每条含 text / metadata / distance。
@@ -70,7 +70,7 @@ async def retrieve_context(question_vec: list, top_k: int = 5) -> list[dict]:
 
 # ── 生成回答 ──────────────────────────────────────────────────
 
-def _format_context(context_items: list[dict]) -> str:
+def _format_context(context_items: list) -> str:
     """将检索结果格式化为带编号的参考上下文，包含结构化元数据标注。"""
     parts = []
     for i, item in enumerate(context_items):
@@ -114,7 +114,7 @@ def _generate_answer_sync(
         ),
     }
 
-    messages: list[dict] = [system_msg]
+    messages = [system_msg]
 
     # 拼入近期对话历史（最多 4 轮，避免 token 过多）
     if history:
