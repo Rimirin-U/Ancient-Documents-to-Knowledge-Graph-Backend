@@ -104,6 +104,7 @@ async def get_user_images(
     images = (
         db.query(Image.id)
         .filter(Image.user_id == user_id)
+        .order_by(Image.upload_time.desc())
         .offset(skip)
         .limit(limit)
         .all()
@@ -138,6 +139,7 @@ async def get_user_multi_tasks(
     multi_tasks = (
         db.query(MultiTask.id)
         .filter(MultiTask.user_id == user_id)
+        .order_by(MultiTask.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()
