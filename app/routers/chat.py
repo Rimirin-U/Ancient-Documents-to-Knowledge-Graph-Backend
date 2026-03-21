@@ -11,7 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import OcrResult, OcrStatus, StructuredResult, get_db
+from database import Image, OcrResult, OcrStatus, StructuredResult, get_db
 from app.core.logger import get_logger
 from app.core.security import security, verify_token
 from app.services.rag_service import rag_pipeline
@@ -166,17 +166,36 @@ async def chat_query_stream(
 @router.get(
     "/kb-status",
     summary="知识库状态",
-    description="返回当前知识库中已索引的文档数量。",
+    description=(
+        "返回当前用户可用于智能问答的文书数量。"
+        "与问答主流程一致：统计数据库中 OCR 已完成且有正文的文书，而非仅 Chroma 向量条数。"
+    ),
 )
 async def kb_status(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
 ):
     payload = verify_token(credentials.credentials)
-    user_id = payload.get("user_id")
+    raw_uid = payload.get("user_id")
+    if raw_uid is None:
+        return {"success": True, "data": {"indexed_count": 0}}
     try:
-        from app.services.vector_store.chroma import count_documents
-        count = count_documents(where={"user_id": user_id})
-        return {"success": True, "data": {"indexed_count": count}}
+        uid = int(raw_uid)
+    except (TypeError, ValueError):
+        return {"success": True, "data": {"indexed_count": 0}}
+
+    try:
+        n_eligible = (
+            db.query(OcrResult)
+            .join(Image, OcrResult.image_id == Image.id)
+            .filter(
+                OcrResult.status == OcrStatus.DONE,
+                Image.user_id == uid,
+                OcrResult.raw_text.isnot(None),
+            )
+            .count()
+        )
+        return {"success": True, "data": {"indexed_count": n_eligible}}
     except Exception:
         return {"success": True, "data": {"indexed_count": 0}}
 

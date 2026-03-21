@@ -292,6 +292,7 @@ def _index_ocr_to_chroma(ocr_result_id: int, text: str, image) -> None:
         from app.services.vector_store.chroma import upsert_document
         embedding = _get_text_embeddings_sync(text)
         metadata = {
+            "user_id": image.user_id if image else 0,
             "ocr_result_id": ocr_result_id,
             "image_id": image.id if image else 0,
             "filename": image.filename if image else "",
