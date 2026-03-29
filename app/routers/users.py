@@ -157,16 +157,22 @@ async def get_user_multi_tasks(
         
         # Get up to 3 preview image ids for the thumbnails
         from database import StructuredResult, OcrResult, MultiTaskStructuredResult
-        preview_images = (
-            db.query(OcrResult.image_id)
-            .select_from(MultiTaskStructuredResult)
-            .join(StructuredResult, StructuredResult.id == MultiTaskStructuredResult.structured_result_id)
-            .join(OcrResult, OcrResult.id == StructuredResult.ocr_result_id)
+        
+        associations = (
+            db.query(MultiTaskStructuredResult.structured_result_id)
             .filter(MultiTaskStructuredResult.multi_task_id == task.id)
             .limit(3)
             .all()
         )
-        preview_image_ids = [img[0] for img in preview_images]
+        sr_ids = [assoc[0] for assoc in associations]
+        
+        preview_image_ids = []
+        if sr_ids:
+            srs = db.query(StructuredResult.ocr_result_id).filter(StructuredResult.id.in_(sr_ids)).all()
+            ocr_ids = [sr[0] for sr in srs]
+            if ocr_ids:
+                ocrs = db.query(OcrResult.image_id).filter(OcrResult.id.in_(ocr_ids)).all()
+                preview_image_ids = [ocr[0] for ocr in ocrs]
 
         items.append({
             "id": task.id,
