@@ -154,11 +154,25 @@ async def get_user_multi_tasks(
             .filter(MultiTaskStructuredResult.multi_task_id == task.id)
             .count()
         )
+        
+        # Get up to 3 preview image ids for the thumbnails
+        from database import StructuredResult, OcrResult
+        preview_images = (
+            db.query(OcrResult.image_id)
+            .join(StructuredResult, StructuredResult.ocr_result_id == OcrResult.id)
+            .join(MultiTaskStructuredResult, MultiTaskStructuredResult.structured_result_id == StructuredResult.id)
+            .filter(MultiTaskStructuredResult.multi_task_id == task.id)
+            .limit(3)
+            .all()
+        )
+        preview_image_ids = [img[0] for img in preview_images]
+
         items.append({
             "id": task.id,
             "status": task.status.value,
             "doc_count": doc_count,
             "created_at": task.created_at.isoformat(),
+            "preview_image_ids": preview_image_ids,
         })
 
     return {
