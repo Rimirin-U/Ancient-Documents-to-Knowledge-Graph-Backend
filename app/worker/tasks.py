@@ -77,6 +77,7 @@ def task_analyze_ocr_result(self, ocr_result_id: int):
             task_analyze_structured_result.delay(sr.id)
             logger.info("task_graph_queued_after_structured", extra={"structured_result_id": sr.id})
     except Exception as exc:
+        db.rollback()
         logger.error(
             "task_analyze_failed",
             extra={"ocr_result_id": ocr_result_id, "attempt": self.request.retries + 1, "error": str(exc)},

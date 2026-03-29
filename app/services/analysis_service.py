@@ -73,6 +73,20 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
         # ② 调用 LLM 结构化提取
         structured_data = await call_llm_for_structure(ocr_result.raw_text)
 
+        # LLM 期间用户可能已删除文书，级联删掉 structured_result；须重新加载，避免 UPDATE 匹配 0 行
+        sr_id = structured_result.id
+        ocr_result = db.query(OcrResult).filter(OcrResult.id == ocr_result_id).first()
+        if not ocr_result:
+            print(f"OcrResult {ocr_result_id} removed during structured analysis, skip persist")
+            return
+        structured_result = db.query(StructuredResult).filter(StructuredResult.id == sr_id).first()
+        if not structured_result:
+            print(
+                f"StructuredResult {sr_id} removed during structured analysis "
+                f"(e.g. image deleted), skip ocr_result_id={ocr_result_id}"
+            )
+            return
+
         # 补充文件名信息（用于 RAG 元数据）
         if ocr_result.image:
             structured_data["filename"] = ocr_result.image.filename
@@ -138,9 +152,23 @@ async def analyze_ocr_result(ocr_result_id: int, db: Session) -> None:
 
     except Exception as e:
         print(f"Error analyzing OCR result {ocr_result_id}: {e}")
-        structured_result.content = json.dumps({"error": str(e)})
-        structured_result.status = OcrStatus.FAILED
-        db.commit()
+        db.rollback()
+        sr = (
+            db.query(StructuredResult)
+            .filter(StructuredResult.ocr_result_id == ocr_result_id)
+            .order_by(StructuredResult.id.desc())
+            .first()
+        )
+        if sr:
+            sr.content = json.dumps({"error": str(e)})
+            sr.status = OcrStatus.FAILED
+            try:
+                db.commit()
+            except Exception as persist_err:
+                print(f"Could not persist FAILED status for StructuredResult {sr.id}: {persist_err}")
+                db.rollback()
+        else:
+            print(f"No StructuredResult row to mark FAILED (ocr_result_id={ocr_result_id})")
 
 
 from app.services.analysis_components.entity_resolver import (
